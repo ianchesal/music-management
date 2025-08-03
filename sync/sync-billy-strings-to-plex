@@ -1,0 +1,69 @@
+#!/bin/bash
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Configuration
+EXCLUDE_FILE="${SCRIPT_DIR}/billy-strings-excludes.txt"
+SRC="/Volumes/Fatboy/Music/iTunes/Music/Billy Strings/"
+TRANQUILITY="tranquility:'/data/media/Sorted/Music/Billy Strings/Live/'"
+PARTIAL_DIR="/Volumes/Fatboy/Music/iTunes/Music/.rsync-partial"
+DRY_RUN=""
+
+confirm_continue() {
+  local prompt="${1:-Continue?}"
+  local response
+
+  printf "\n%s [y/N]: " "$prompt"
+  read -r response
+
+  case "$response" in
+  [yY] | [yY][eE][sS])
+    return 0
+    ;;
+  *)
+    echo "Exiting..."
+    exit 0
+    ;;
+  esac
+}
+
+# Parse arguments
+while getopts "n" opt; do
+  case $opt in
+  n) DRY_RUN="--dry-run" ;;
+  *)
+    echo "Usage: $0 [-n]" >&2
+    exit 1
+    ;;
+  esac
+done
+
+if [[ ! -f "$EXCLUDE_FILE" ]]; then
+  echo "Error: Exclude file not found: $EXCLUDE_FILE" >&2
+  exit 1
+fi
+echo "Using exclude file: $EXCLUDE_FILE"
+
+# Common rsync options
+# Note: --checksum is pretty slow but more thorough. Add it if you want.
+RSYNC_OPTS="--archive --compress --verbose --human-readable --delete --progress --partial --partial-dir=${PARTIAL_DIR}"
+if [[ -n "$DRY_RUN" ]]; then
+  RSYNC_OPTS="${DRY_RUN} ${RSYNC_OPTS}"
+fi
+echo "Using rsync options: ${RSYNC_OPTS}"
+
+confirm_continue "Continue with sync operations?"
+
+# Sync only live albums to tranquility
+echo -e "\n=== Syncing LIVE albums to tranquility ==="
+rsync ${RSYNC_OPTS} \
+  --delete-excluded \
+  --exclude-from="${EXCLUDE_FILE}" \
+  "${SRC}" \
+  "${TRANQUILITY}"
+
+if [[ -n "$DRY_RUN" ]]; then
+  echo -e "\n*** DRY RUN COMPLETE - No files were actually transferred ***"
+fi
