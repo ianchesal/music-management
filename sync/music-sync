@@ -1,0 +1,50 @@
+#!/bin/bash
+
+# Music Sync - Unified script for syncing music collections
+# Usage: music-sync [-n] [-y] <artist>
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LIB_DIR="${SCRIPT_DIR}/lib"
+
+# Source the sync library
+# shellcheck source=lib/sync-lib.sh
+source "${LIB_DIR}/sync-lib.sh"
+
+# Restore SCRIPT_DIR after sourcing library (library redefines it)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Show usage information
+show_usage() {
+    echo "Music Sync - Unified script for syncing music collections"
+    echo ""
+    echo "Usage: $0 [-n] [-y] <artist>"
+    echo ""
+    echo "Options:"
+    echo "  -n    Dry run (preview changes only)"
+    echo "  -y    Skip confirmation prompts"
+    echo ""
+    echo "Available artists:"
+    for config in "${SCRIPT_DIR}/config"/*.conf; do
+        if [ -f "$config" ]; then
+            artist_name=$(basename "$config" .conf)
+            # Skip global config as it's not an artist
+            [ "$artist_name" != "global" ] && echo "$artist_name"
+        fi
+    done | sort | sed 's/^/  /'
+    echo ""
+    echo "Examples:"
+    echo "  $0 phish                    # Sync Phish with prompts"
+    echo "  $0 -n billy-strings         # Dry run for Billy Strings"
+    echo "  $0 -y trey-anastasio        # Skip prompts for Trey Anastasio"
+}
+
+# Check if help requested or no arguments
+if [[ $# -eq 0 ]] || [[ "$1" == "-h" ]] || [[ "$1" == "--help" ]]; then
+    show_usage
+    exit 0
+fi
+
+# Execute the sync
+perform_sync "$@"
