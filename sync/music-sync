@@ -12,6 +12,9 @@ LIB_DIR="${SCRIPT_DIR}/lib"
 # shellcheck source=lib/sync-lib.sh
 source "${LIB_DIR}/sync-lib.sh"
 
+# Restore SCRIPT_DIR after sourcing library (library redefines it)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 # Show usage information
 show_usage() {
     echo "Music Sync - Unified script for syncing music collections"
@@ -23,7 +26,13 @@ show_usage() {
     echo "  -y    Skip confirmation prompts"
     echo ""
     echo "Available artists:"
-    find "${SCRIPT_DIR}/config" -name '*.conf' -printf '%f\n' 2>/dev/null | sed 's|\.conf$||' | sort | sed 's/^/  /'
+    for config in "${SCRIPT_DIR}/config"/*.conf; do
+        if [ -f "$config" ]; then
+            artist_name=$(basename "$config" .conf)
+            # Skip global config as it's not an artist
+            [ "$artist_name" != "global" ] && echo "$artist_name"
+        fi
+    done | sort | sed 's/^/  /'
     echo ""
     echo "Examples:"
     echo "  $0 phish                    # Sync Phish with prompts"
