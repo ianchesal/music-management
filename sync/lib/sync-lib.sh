@@ -96,7 +96,7 @@ init_sync() {
     if [[ "$ENABLE_NAS_BACKUP" == "true" ]]; then
         NAS="${NAS_BASE}/${NAS_SUBDIR}"
     fi
-    PLEX="${PLEX_SERVER}:${PLEX_BASE}/${PLEX_SUBDIR}"
+    PLEX="${PLEX_SERVER}:'${PLEX_BASE}/${PLEX_SUBDIR}'"
     
     # Exclude file path
     EXCLUDE_FILE_PATH="${SYNC_DIR}/${EXCLUDE_FILE}"
