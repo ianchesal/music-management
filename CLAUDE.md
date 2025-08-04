@@ -27,6 +27,19 @@ All sync scripts follow a common pattern:
 ## Common Development Commands
 
 ### Running Sync Scripts
+
+**New Unified Approach (Recommended):**
+```bash
+# Unified sync command for all artists
+./sync/music-sync phish              # Interactive sync with prompts
+./sync/music-sync -n billy-strings   # Dry run preview
+./sync/music-sync -y trey-anastasio  # Skip confirmation prompts
+
+# Show available artists and usage
+./sync/music-sync --help
+```
+
+**Legacy Approach (Still Supported):**
 ```bash
 # Dry run to preview changes
 ./sync/sync-phish-to-plex -n
@@ -55,13 +68,63 @@ Required external tools:
 
 ## File Structure
 
-- `sync/` - Artist-specific sync scripts and exclude files
-- `sync/*-excludes.txt` - Lists of studio albums/folders to exclude from live-only syncs
+- `sync/` - Music synchronization scripts and configurations
+  - `config/` - Configuration files (global environment settings and per-artist configs)
+  - `lib/` - Shared library functions (sync-lib.sh)
+  - `music-sync` - Unified sync script for all artists
+  - `sync-*-to-plex` - Legacy wrapper scripts (backward compatible)
+  - `*-excludes.txt` - Lists of studio albums/folders to exclude from live-only syncs
 - `zsh/functions/` - Audio utility functions designed for zsh
+- `tests/` - Comprehensive test suite using Bats framework
 
 ## Important Notes
 
-- All paths are hard-coded for the original owner's environment
-- Scripts include interactive confirmation prompts to prevent accidental execution
+- Environment-specific paths are now configured in `sync/config/global.conf` for portability
+- Scripts include interactive confirmation prompts to prevent accidental execution (can be skipped with `-y`)
 - The codebase prioritizes live shows over studio releases for Plex synchronization
 - Error handling uses `set -euo pipefail` in bash scripts for strict mode
+- Comprehensive test suite ensures reliability and prevents regressions
+
+## Testing
+
+The codebase has a comprehensive test suite (28 tests) that covers all functionality:
+
+### Running Tests Locally
+```bash
+cd tests
+bats *.bats                    # Run all 28 tests
+bats sync-lib.bats            # Run unit tests (19 tests)
+bats music-sync.bats          # Run integration tests (9 tests)
+bats --verbose-run *.bats     # Verbose output for debugging
+```
+
+### Test Architecture
+- **Isolated environments**: Each test runs in temporary directories
+- **Comprehensive mocking**: rsync and ssh commands are mocked for safety
+- **Real configuration testing**: Tests use actual config files with test data
+- **Fast execution**: All tests complete in seconds
+
+### What's Tested
+- Configuration loading and validation (global + artist configs)
+- Command-line argument parsing and error handling
+- Environment initialization and path resolution
+- Sync functionality (NAS backup, Plex sync, exclusions)
+- Dry-run mode and confirmation prompts
+- End-to-end workflows via the `music-sync` script
+
+### CI/CD Integration
+Tests run automatically on pull requests via GitHub Actions:
+- Unit and integration tests with Bats
+- Shell script linting with ShellCheck
+- Configuration validation 
+- Documentation verification
+
+**All tests must pass (28/28) before merging changes.**
+
+### Test Development Notes
+- Tests use Bats framework with custom helper functions in `tests/test_helper.bash`
+- Each test runs in isolated temporary directories (`$TEST_TMP_DIR`)
+- Mock commands (rsync, ssh) log their calls for assertion testing
+- Use `bash -c "source test-lib && function"` pattern for testing library functions
+- Test configs use `TEST_TMP_DIR` paths so directories actually exist for validation
+- Use `assert_rsync_called_with` and `assert_file_exists` helpers for common assertions
