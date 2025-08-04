@@ -75,7 +75,7 @@ teardown() {
     [ "$status" -eq 0 ]
     [[ "$output" == *"Artist: Test Artist"* ]]
     [[ "$output" == *"Source: ${TEST_TMP_DIR}/source/Test Artist/"* ]]
-    [[ "$output" == *"Plex Target: test-server:/test/plex/Test Artist/Live/"* ]]
+    [[ "$output" == *"Plex Target: test-server:'/test/plex/Test Artist/Live/'"* ]]
     assert_rsync_called_with "${TEST_TMP_DIR}/source/Test Artist/"
 }
 
@@ -131,7 +131,7 @@ EOF
     # Check that both NAS and Plex syncs occurred
     assert_rsync_called_with "${TEST_TMP_DIR}/source/Full Test/"
     assert_rsync_called_with "${TEST_TMP_DIR}/nas/Full Test/"
-    assert_rsync_called_with "test-server:/test/plex/Full Test/Live/"
+    assert_rsync_called_with "test-server:'/test/plex/Full Test/Live/'"
     
     # Check verification ran
     [[ "$output" == *"Full test verification"* ]]

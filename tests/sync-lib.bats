@@ -84,7 +84,7 @@ teardown() {
     run bash -c "source '${TEST_TMP_DIR}/sync-lib-test.sh' && parse_args test-artist && init_sync && echo SRC=\$SRC && echo PLEX=\$PLEX && echo EXCLUDE_FILE_PATH=\$EXCLUDE_FILE_PATH"
     [ "$status" -eq 0 ]
     [[ "$output" == *"SRC=${TEST_TMP_DIR}/source/Test Artist/"* ]]
-    [[ "$output" == *"PLEX=test-server:/test/plex/Test Artist/Live/"* ]]
+    [[ "$output" == *"PLEX=test-server:'/test/plex/Test Artist/Live/'"* ]]
     [[ "$output" == *"EXCLUDE_FILE_PATH=${TEST_TMP_DIR}/test-excludes.txt"* ]]
 }
 
@@ -151,7 +151,7 @@ EOF
     assert_rsync_called_with "--delete-excluded"
     assert_rsync_called_with "--exclude-from=${TEST_TMP_DIR}/test-excludes.txt"
     assert_rsync_called_with "${TEST_TMP_DIR}/source/Test Artist/"
-    assert_rsync_called_with "test-server:/test/plex/Test Artist/Live/"
+    assert_rsync_called_with "test-server:'/test/plex/Test Artist/Live/'"
 }
 
 @test "run_verification skips in dry run mode" {
