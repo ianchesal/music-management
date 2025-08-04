@@ -9,6 +9,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LIB_DIR="${SCRIPT_DIR}/lib"
 
 # Source the sync library
+# shellcheck source=lib/sync-lib.sh
 source "${LIB_DIR}/sync-lib.sh"
 
 # Show usage information
@@ -22,7 +23,7 @@ show_usage() {
     echo "  -y    Skip confirmation prompts"
     echo ""
     echo "Available artists:"
-    ls "${SCRIPT_DIR}/config"/*.conf 2>/dev/null | sed 's|.*/||; s|\.conf$||' | sort | sed 's/^/  /'
+    find "${SCRIPT_DIR}/config" -name '*.conf' -printf '%f\n' 2>/dev/null | sed 's|\.conf$||' | sort | sed 's/^/  /'
     echo ""
     echo "Examples:"
     echo "  $0 phish                    # Sync Phish with prompts"

@@ -62,7 +62,7 @@ jobs:
         
     - name: Run ShellCheck on sync scripts
       run: |
-        find sync -name "*.sh" -o -name "music-sync" -o -name "sync-*-to-plex" | xargs shellcheck
+        find sync -name "*.sh" -o -name "music-sync" -o -name "sync-*-to-plex" | xargs shellcheck -e SC1091
         
     - name: Run ShellCheck on test scripts
       run: |

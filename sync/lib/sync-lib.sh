@@ -17,6 +17,7 @@ load_global_config() {
         echo "Error: Global configuration file not found: $global_config" >&2
         exit 1
     fi
+    # shellcheck source=/dev/null
     source "$global_config"
 }
 
@@ -26,9 +27,10 @@ load_artist_config() {
     if [[ ! -f "$artist_config" ]]; then
         echo "Error: Artist configuration file not found: $artist_config" >&2
         echo "Available artists:" >&2
-        ls "${CONFIG_DIR}"/*.conf 2>/dev/null | sed 's|.*/||; s|\.conf$||' | sort >&2
+        find "${CONFIG_DIR}" -name '*.conf' -printf '%f\n' 2>/dev/null | sed 's|\.conf$||' | sort >&2
         exit 1
     fi
+    # shellcheck source=/dev/null
     source "$artist_config"
 }
 
@@ -77,7 +79,7 @@ parse_args() {
     if [[ $# -lt 1 ]]; then
         echo "Error: Artist name required" >&2
         echo "Available artists:" >&2
-        ls "${CONFIG_DIR}"/*.conf 2>/dev/null | sed 's|.*/||; s|\.conf$||' | sort >&2
+        find "${CONFIG_DIR}" -name '*.conf' -printf '%f\n' 2>/dev/null | sed 's|\.conf$||' | sort >&2
         exit 1
     fi
     
@@ -99,11 +101,14 @@ init_sync() {
     # Exclude file path
     EXCLUDE_FILE_PATH="${SYNC_DIR}/${EXCLUDE_FILE}"
     
-    # Build rsync options
-    RSYNC_OPTS="${RSYNC_BASE_OPTS} --partial-dir=${PARTIAL_DIR}"
+    # Build rsync options array
+    read -ra RSYNC_OPTS_ARRAY <<< "${RSYNC_BASE_OPTS} --partial-dir=${PARTIAL_DIR}"
     if [[ -n "$DRY_RUN" ]]; then
-        RSYNC_OPTS="${DRY_RUN} ${RSYNC_OPTS}"
+        RSYNC_OPTS_ARRAY=("$DRY_RUN" "${RSYNC_OPTS_ARRAY[@]}")
     fi
+    
+    # Keep string version for display purposes
+    RSYNC_OPTS="${RSYNC_OPTS_ARRAY[*]}"
     
     # Override confirmation prompts if requested
     if [[ "$SKIP_CONFIRM" == "true" ]]; then
@@ -142,7 +147,7 @@ sync_to_nas() {
     fi
     
     echo "=== Backing up ALL content to NAS ==="
-    rsync ${RSYNC_OPTS} \
+    rsync "${RSYNC_OPTS_ARRAY[@]}" \
         "${SRC}" \
         "${NAS}"
 }
@@ -150,7 +155,7 @@ sync_to_nas() {
 # Perform Plex sync with exclusions
 sync_to_plex() {
     echo -e "\n=== Syncing LIVE albums to Plex ==="
-    rsync ${RSYNC_OPTS} \
+    rsync "${RSYNC_OPTS_ARRAY[@]}" \
         --delete-excluded \
         --exclude-from="${EXCLUDE_FILE_PATH}" \
         "${SRC}" \

@@ -114,16 +114,17 @@ load_artist_config() {
     if [[ ! -f "\$artist_config" ]]; then
         echo "Error: Artist configuration file not found: \$artist_config" >&2
         echo "Available artists:" >&2
-        ls "\${CONFIG_DIR}"/*.conf 2>/dev/null | sed 's|.*/||; s|\.conf\$||' | sort >&2
+        find "\${CONFIG_DIR}" -name '*.conf' -printf '%f\n' 2>/dev/null | sed 's|\.conf\$||' | sort >&2
         exit 1
     fi
     source "\$artist_config"
 }
 
 # Copy the rest of the functions from the original library
-$(sed -n '35,$p' "${PROJECT_ROOT}/sync/lib/sync-lib.sh")
+$(sed -n '37,$p' "${PROJECT_ROOT}/sync/lib/sync-lib.sh")
 EOF
 
+    # shellcheck source=/dev/null
     source "${TEST_TMP_DIR}/sync-lib-test.sh"
 }
 
