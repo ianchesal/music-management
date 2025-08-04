@@ -2,126 +2,126 @@ name: Test Music Sync Scripts
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [main, develop]
   pull_request:
-    branches: [ main ]
+    branches: [main]
 
 jobs:
   test:
     runs-on: ubuntu-latest
-    
+
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      
-    - name: Install bats
-      run: |
-        git clone https://github.com/bats-core/bats-core.git
-        cd bats-core
-        sudo ./install.sh /usr/local
-        
-    - name: Install bats helpers
-      run: |
-        mkdir -p tests/helpers
-        cd tests/helpers
-        git clone https://github.com/bats-core/bats-support.git
-        git clone https://github.com/bats-core/bats-assert.git
-        
-    - name: Make scripts executable
-      run: |
-        chmod +x sync/music-sync
-        chmod +x sync/sync-*-to-plex
-        find tests -name "*.bats" -exec chmod +x {} \;
-        
-    - name: Run unit tests
-      run: |
-        cd tests
-        bats sync-lib.bats
-        
-    - name: Run integration tests  
-      run: |
-        cd tests
-        bats music-sync.bats
-        
-    - name: Run all tests with verbose output
-      run: |
-        cd tests
-        bats --verbose-run *.bats
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install bats
+        run: |
+          git clone https://github.com/bats-core/bats-core.git
+          cd bats-core
+          sudo ./install.sh /usr/local
+
+      - name: Install bats helpers
+        run: |
+          mkdir -p tests/helpers
+          cd tests/helpers
+          git clone https://github.com/bats-core/bats-support.git
+          git clone https://github.com/bats-core/bats-assert.git
+
+      - name: Make scripts executable
+        run: |
+          chmod +x sync/music-sync
+          find tests -name "*.bats" -exec chmod +x {} \;
+
+      - name: Run unit tests
+        run: |
+          cd tests
+          bats sync-lib.bats
+
+      - name: Run integration tests
+        run: |
+          cd tests
+          bats music-sync.bats
+
+      - name: Run all tests with verbose output
+        run: |
+          cd tests
+          bats --verbose-run *.bats
 
   shellcheck:
     runs-on: ubuntu-latest
-    
+
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      
-    - name: Install ShellCheck
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y shellcheck
-        
-    - name: Run ShellCheck on sync scripts
-      run: |
-        find sync -name "*.sh" -o -name "music-sync" -o -name "sync-*-to-plex" | xargs shellcheck -e SC1091
-        
-    - name: Run ShellCheck on test scripts
-      run: |
-        find tests -name "*.bash" -o -name "*.bats" | xargs shellcheck -x
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install ShellCheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+
+      - name: Run ShellCheck on sync scripts
+        run: |
+          find sync -name "*.sh" -o -name "music-sync" -o -name "sync-*-to-plex" | xargs shellcheck -e SC1091
+
+      - name: Run ShellCheck on test scripts
+        run: |
+          find tests -name "*.bash" -o -name "*.bats" | xargs shellcheck -x
 
   config-validation:
     runs-on: ubuntu-latest
-    
+
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      
-    - name: Validate configuration files
-      run: |
-        # Check that all config files are valid bash syntax
-        for config in sync/config/*.conf; do
-          echo "Validating $config"
-          bash -n "$config"
-        done
-        
-    - name: Check config completeness
-      run: |
-        # Verify all expected config files exist
-        required_configs="global.conf phish.conf billy-strings.conf trey-anastasio.conf dead-and-company.conf tab.conf"
-        for config in $required_configs; do
-          if [ ! -f "sync/config/$config" ]; then
-            echo "Missing required config: $config"
-            exit 1
-          fi
-        done
-        
-    - name: Validate exclude files exist
-      run: |
-        # Check that exclude files referenced in configs exist
-        for exclude_file in sync/*-excludes.txt sync/phish-studio-albums.txt; do
-          if [ ! -f "$exclude_file" ]; then
-            echo "Missing exclude file: $exclude_file"
-            exit 1
-          fi
-        done
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Validate configuration files
+        run: |
+          # Check that all config files are valid bash syntax
+          for config in sync/config/*.conf; do
+            echo "Validating $config"
+            bash -n "$config"
+          done
+
+      - name: Check config completeness
+        run: |
+          # Verify all expected config files exist
+          required_configs="global.conf phish.conf billy-strings.conf trey-anastasio.conf dead-and-company.conf tab.conf"
+          for config in $required_configs; do
+            if [ ! -f "sync/config/$config" ]; then
+              echo "Missing required config: $config"
+              exit 1
+            fi
+          done
+
+      - name: Validate exclude files exist
+        run: |
+          # Check that exclude files referenced in configs exist
+          for exclude_file in sync/*-excludes.txt sync/phish-studio-albums.txt; do
+            if [ ! -f "$exclude_file" ]; then
+              echo "Missing exclude file: $exclude_file"
+              exit 1
+            fi
+          done
 
   documentation:
     runs-on: ubuntu-latest
-    
+
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      
-    - name: Check documentation is up to date
-      run: |
-        # Verify CLAUDE.md mentions new architecture
-        if ! grep -q "music-sync" CLAUDE.md; then
-          echo "CLAUDE.md should document the new music-sync command"
-          exit 1
-        fi
-        
-    - name: Check usage examples work  
-      run: |
-        # Test that help commands work
-        cd sync
-        ./music-sync --help
-        echo "Help output verified"
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Check documentation is up to date
+        run: |
+          # Verify CLAUDE.md mentions new architecture
+          if ! grep -q "music-sync" CLAUDE.md; then
+            echo "CLAUDE.md should document the new music-sync command"
+            exit 1
+          fi
+
+      - name: Check usage examples work
+        run: |
+          # Test that help commands work
+          cd sync
+          ./music-sync --help
+          echo "Help output verified"
+

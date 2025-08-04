@@ -39,16 +39,6 @@ All sync scripts follow a common pattern:
 ./sync/music-sync --help
 ```
 
-**Legacy Approach (Still Supported):**
-```bash
-# Dry run to preview changes
-./sync/sync-phish-to-plex -n
-./sync/sync-billy-strings-to-plex -n
-
-# Execute actual sync
-./sync/sync-phish-to-plex
-```
-
 ### Audio Functions (from zsh/functions/)
 ```bash
 # Convert FLAC to ALAC with corrected tags
@@ -72,7 +62,6 @@ Required external tools:
   - `config/` - Configuration files (global environment settings and per-artist configs)
   - `lib/` - Shared library functions (sync-lib.sh)
   - `music-sync` - Unified sync script for all artists
-  - `sync-*-to-plex` - Legacy wrapper scripts (backward compatible)
   - `*-excludes.txt` - Lists of studio albums/folders to exclude from live-only syncs
 - `zsh/functions/` - Audio utility functions designed for zsh
 - `tests/` - Comprehensive test suite using Bats framework

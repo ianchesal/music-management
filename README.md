@@ -10,7 +10,6 @@ A collection of command-line tools for managing music collections, specifically 
 - **🎯 Artist-Specific Rules**: Per-artist exclude lists for studio album filtering
 - **🔧 Audio Processing**: FLAC to ALAC conversion with metadata correction
 - **✅ Comprehensive Testing**: Full test suite with GitHub Actions CI/CD
-- **🔄 Backward Compatible**: Existing workflows continue to work unchanged
 
 ## Quick Start
 
@@ -59,7 +58,6 @@ Modern, unified approach to synchronizing music collections:
 - **`music-sync`** - Main unified script supporting all artists
 - **`sync/config/`** - Environment and artist-specific configurations  
 - **`sync/lib/sync-lib.sh`** - Shared library with all common functionality
-- **Legacy scripts** - `sync-*-to-plex` scripts maintain backward compatibility
 
 **Key Features:**
 - Two-phase sync: complete backup to NAS, filtered sync to Plex
@@ -236,14 +234,6 @@ flac2alac "Artist Name" "Album Name"
 flacinfo *.flac
 ```
 
-### Legacy Scripts (Backward Compatible)
-
-Existing workflows continue to work:
-```bash
-./sync/sync-phish-to-plex -n
-./sync/sync-billy-strings-to-plex
-```
-
 ## CI/CD
 
 GitHub Actions automatically run on pull requests:
@@ -265,7 +255,6 @@ sync/
 ├── lib/
 │   └── sync-lib.sh          # Shared library functions
 ├── music-sync               # Unified entry point
-├── sync-*-to-plex          # Legacy wrapper scripts
 └── *-excludes.txt          # Studio album exclude lists
 
 tests/                        # Comprehensive test suite
