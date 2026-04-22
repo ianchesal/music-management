@@ -1,0 +1,427 @@
+#!/usr/bin/env python3
+"""
+phish-compare — Compare existing Phish collection against a torrent download.
+
+Extracts dates from both directory naming conventions, matches shows, and
+reports what's matched, what's unique to each side, and which copy is canonical.
+Also compares a studio album path against the torrent's non-show items.
+
+Usage:
+  phish-compare
+  phish-compare --existing PATH --torrent PATH --studio PATH
+"""
+
+import os
+import re
+import sys
+from pathlib import Path
+from collections import defaultdict
+
+# ── Defaults ─────────────────────────────────────────────────────────────────
+
+DEFAULT_EXISTING = Path("/data/media/Sorted/Unsorted/Music/Phish")
+DEFAULT_TORRENT  = Path("/data/torrents/Phish-Live.Phish.Project-2002-2026")
+DEFAULT_STUDIO   = Path("/data/media/Sorted/Music/Phish")
+
+# ── Terminal ──────────────────────────────────────────────────────────────────
+
+try:
+    COLS = min(os.get_terminal_size().columns, 160)
+except OSError:
+    COLS = 120
+
+USE_COLOR = sys.stdout.isatty()
+
+
+def _ansi(code, s):
+    return f"\033[{code}m{s}\033[0m" if USE_COLOR else s
+
+
+def bold(s):   return _ansi("1",    s)
+def dim(s):    return _ansi("2",    s)
+def red(s):    return _ansi("91",   s)
+def green(s):  return _ansi("92",   s)
+def yellow(s): return _ansi("93",   s)
+def blue(s):   return _ansi("94",   s)
+def cyan(s):   return _ansi("96",   s)
+def gray(s):   return _ansi("90",   s)
+def white(s):  return _ansi("97",   s)
+def magenta(s): return _ansi("95",  s)
+
+
+def colored_bold(s, fg):
+    """Apply bold + a foreground color code in a single escape so nesting works."""
+    return _ansi(f"1;{fg}", s)
+
+
+def pad(s, width):
+    """Pad raw string to width before applying color (color codes skew f-string width)."""
+    return f"{s:<{width}}"
+
+
+def hr(char="─", width=None):
+    return char * (width or COLS)
+
+# ── Date extraction ───────────────────────────────────────────────────────────
+
+def date_from_existing(name: str):
+    """
+    Return 'YYYY-MM-DD' from an existing-collection directory name, or None.
+
+    Handles formats:
+      2024_07_20 Mansfield, MA
+      2009-11-27 Albany, NY
+      1995-06-19 - Deer Creek Music Center, Noblesville, IN
+      1994_12_6 Goleta, CA          (single-digit day)
+      7_13_1994 Big Birch ...       (legacy M_DD_YYYY)
+      6_11_1994 Red Rocks ...       (legacy M_DD_YYYY)
+    """
+    # YYYY_MM_DD or YYYY-MM-DD at start (handles single-digit month/day)
+    m = re.match(r'^(\d{4})[-_](\d{1,2})[-_](\d{1,2})', name)
+    if m:
+        y, mo, d = m.group(1), int(m.group(2)), int(m.group(3))
+        return f"{y}-{mo:02d}-{d:02d}"
+    # Legacy M_DD_YYYY (e.g. "7_13_1994", "6_11_1994")
+    m = re.match(r'^(\d{1,2})_(\d{1,2})_(\d{4})\b', name)
+    if m:
+        mo, d, y = int(m.group(1)), int(m.group(2)), m.group(3)
+        return f"{y}-{mo:02d}-{d:02d}"
+    return None
+
+
+def date_from_torrent(name: str):
+    """
+    Return 'YYYY-MM-DD' from a torrent directory name, or None.
+
+    Handles:
+      Phish-2024-07-20.Xfinity.Center.Mansfield.MA.[2260]
+    """
+    m = re.match(r'^Phish-(\d{4})-(\d{2})-(\d{2})\.', name)
+    if m:
+        return f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
+    return None
+
+# ── Studio album name normalization ──────────────────────────────────────────
+
+def normalize_studio(dirname: str) -> str:
+    """
+    Normalize a studio album directory name for fuzzy matching.
+      'Farmhouse (2000)'             → 'farmhouse'
+      'A Picture of Nectar (1992)'   → 'a picture of nectar'
+      'Get More Down (2021)'         → 'get more down'
+    """
+    name = re.sub(r'\s*\(\d{4}\)\s*$', '', dirname).strip()
+    return name.lower()
+
+
+def normalize_torrent_undated(dirname: str) -> str:
+    """
+    Normalize a torrent non-show directory name for fuzzy matching.
+      'Phish-Farmhouse.[439]'                    → 'farmhouse'
+      'Phish-Junta.(Vinyl.Remaster).[669]'       → 'junta (vinyl remaster)'
+      'Phish-The.Story.of.the.Ghost.[437]'       → 'the story of the ghost'
+      'Sci-Fi.Soldier.-.Get.More.Down.[2001]'    → 'sci-fi soldier - get more down'
+      'Phish-Live.Bait.Vol.10.[878]'             → 'live bait vol 10'
+    """
+    name = dirname
+    name = re.sub(r'^Phish-', '', name)         # strip 'Phish-' prefix
+    name = re.sub(r'\.\[\d+\]$', '', name)      # strip '.[ID]' suffix
+    name = name.replace('.', ' ')               # dots → spaces
+    name = re.sub(r'\s+', ' ', name).strip()
+    return name.lower()
+
+
+def studio_names_match(studio_norm: str, torrent_norm: str) -> bool:
+    """
+    Return True if the two normalized names refer to the same release.
+
+    Strategies (in order):
+      1. Exact match                          'farmhouse' == 'farmhouse'
+      2. Torrent starts with studio name      'junta' in 'junta (vinyl remaster)'
+      3. Studio name appears anywhere         'get more down' in 'sci-fi soldier - get more down'
+    """
+    if studio_norm == torrent_norm:
+        return True
+    if torrent_norm.startswith(studio_norm):
+        return True
+    if studio_norm in torrent_norm:
+        return True
+    return False
+
+# ── Collection loading ────────────────────────────────────────────────────────
+
+def load(path: Path, extractor):
+    """
+    Walk a directory and split entries into dated shows and undated items.
+
+    Returns:
+        dated   — dict[date_str -> list[dirname]]  (date_str: 'YYYY-MM-DD')
+        undated — list[dirname]
+    """
+    dated   = defaultdict(list)
+    undated = []
+
+    if not path.exists():
+        print(f"  {red('Error:')} path does not exist: {path}", file=sys.stderr)
+        sys.exit(1)
+
+    for entry in sorted(path.iterdir(), key=lambda e: e.name.lower()):
+        if entry.name.startswith('.') or not entry.is_dir():
+            continue
+        date = extractor(entry.name)
+        if date:
+            dated[date].append(entry.name)
+        else:
+            undated.append(entry.name)
+
+    return dated, undated
+
+
+def load_studio(path: Path):
+    """Return sorted list of directory names from the studio albums path."""
+    if not path.exists():
+        print(f"  {red('Error:')} studio path does not exist: {path}", file=sys.stderr)
+        sys.exit(1)
+    return sorted(
+        (e.name for e in path.iterdir() if not e.name.startswith('.') and e.is_dir()),
+        key=str.lower,
+    )
+
+# ── Section headers ───────────────────────────────────────────────────────────
+
+def section(title, note="", fg="96"):
+    bar       = hr("━")
+    note_part = f"  {dim(note)}" if note else ""
+    print()
+    print(colored_bold(bar, fg))
+    print(colored_bold(f"  {title}", fg) + note_part)
+    print(colored_bold(bar, fg))
+    print()
+
+# ── Report sections ───────────────────────────────────────────────────────────
+
+def print_header(existing_path, torrent_path, studio_path):
+    print()
+    print(f"  {colored_bold('PHISH COLLECTION COMPARISON', '96')}")
+    print(f"  {dim('Live shows :')}  {existing_path}")
+    print(f"  {dim('Studio     :')}  {studio_path}")
+    print(f"  {dim('Torrent    :')}  {torrent_path}")
+
+
+def print_stats(ex_dates, tr_dates, matched, ex_only, tr_only):
+    print()
+    parts = [
+        f"{cyan(str(len(ex_dates)))} existing shows",
+        f"{cyan(str(len(tr_dates)))} torrent shows",
+        f"{green(str(len(matched)))} matched",
+        f"{yellow(str(len(ex_only)))} existing-only",
+        f"{blue(str(len(tr_only)))} torrent-only",
+    ]
+    print("  " + "  ·  ".join(parts))
+
+
+def print_matches(matched_dates, ex_dated, tr_dated):
+    section(f"MATCHES — {len(matched_dates)} shows",
+            "torrent copy is canonical for each", fg="92")
+
+    date_w = 11
+    ex_w   = max(len("YOUR COPY"),    max((len(n) for d in matched_dates for n in ex_dated[d]), default=0))
+    tr_w   = max(len("TORRENT COPY"), max((len(n) for d in matched_dates for n in tr_dated[d]), default=0))
+
+    print(f"  {bold(pad('DATE', date_w))}  "
+          f"{bold(pad('YOUR COPY', ex_w))}  "
+          f"{bold(pad('TORRENT COPY', tr_w))}")
+    print(f"  {gray(hr('─', date_w))}  {gray(hr('─', ex_w))}  {gray(hr('─', tr_w))}")
+
+    for date in matched_dates:
+        ex_names = ex_dated[date]
+        tr_names = tr_dated[date]
+        rows = max(len(ex_names), len(tr_names))
+        for i in range(rows):
+            d_raw  = date if i == 0 else ""
+            ex_raw = ex_names[i] if i < len(ex_names) else ""
+            tr_raw = tr_names[i] if i < len(tr_names) else ""
+            print(f"  {dim(pad(d_raw, date_w))}  "
+                  f"{yellow(pad(ex_raw, ex_w))}  "
+                  f"{green(pad(tr_raw, tr_w))}")
+
+
+def print_one_sided(dates, dated, label, note, color_fn, fg):
+    section(f"ONLY IN {label} — {len(dates)} shows", note, fg=fg)
+
+    date_w = 11
+    name_w = max(len("DIRECTORY"), max((len(n) for d in dates for n in dated[d]), default=0))
+
+    print(f"  {bold(pad('DATE', date_w))}  {bold('DIRECTORY')}")
+    print(f"  {gray(hr('─', date_w))}  {gray(hr('─', name_w))}")
+
+    for date in dates:
+        for i, name in enumerate(dated[date]):
+            d_raw = date if i == 0 else ""
+            print(f"  {dim(pad(d_raw, date_w))}  {color_fn(pad(name, name_w))}")
+
+
+def print_studio(studio_albums, tr_undated):
+    """
+    Cross-reference studio album path against torrent non-show items.
+    Groups output into: matched pairs, studio-only, torrent-only (unmatched).
+    """
+    # Build match map: studio dirname → list of matching torrent dirnames
+    tr_norm_map = {t: normalize_torrent_undated(t) for t in tr_undated}
+
+    matched_pairs  = []   # [(studio_dir, [torrent_dirs])]
+    studio_only    = []
+    torrent_matched = set()
+
+    for s in studio_albums:
+        s_norm = normalize_studio(s)
+        hits = [t for t, tn in tr_norm_map.items() if studio_names_match(s_norm, tn)]
+        if hits:
+            matched_pairs.append((s, hits))
+            torrent_matched.update(hits)
+        else:
+            studio_only.append(s)
+
+    torrent_only = [t for t in tr_undated if t not in torrent_matched]
+
+    # ── Matched ──
+    section(f"STUDIO ALBUMS — {len(matched_pairs)} matched",
+            "torrent copy is canonical for each", fg="95")
+
+    st_w = max(len("YOUR STUDIO COPY"),    max((len(s) for s, _ in matched_pairs), default=0))
+    tr_w = max(len("TORRENT EQUIVALENT(S)"), max((len(t) for _, ts in matched_pairs for t in ts), default=0))
+
+    print(f"  {bold(pad('YOUR STUDIO COPY', st_w))}  {bold('TORRENT EQUIVALENT(S)')}")
+    print(f"  {gray(hr('─', st_w))}  {gray(hr('─', tr_w))}")
+
+    for s_dir, t_dirs in matched_pairs:
+        for i, t_dir in enumerate(t_dirs):
+            s_col = pad(s_dir, st_w) if i == 0 else pad("", st_w)
+            print(f"  {yellow(s_col)}  {green(pad(t_dir, tr_w))}")
+
+    # ── Studio-only ──
+    if studio_only:
+        print()
+        print(f"  {colored_bold('YOUR STUDIO COPY ONLY', '93')}  "
+              f"{dim('(not found in torrent — keep these)')}")
+        print(f"  {gray(hr('─', COLS - 2))}")
+        for s in studio_only:
+            print(f"  {yellow(s)}")
+
+    # ── Torrent-only non-show items ──
+    if torrent_only:
+        print()
+        print(f"  {colored_bold('TORRENT NON-SHOW ITEMS (unmatched)', '94')}  "
+              f"{dim('live compilations, rarities, extras')}")
+        print(f"  {gray(hr('─', COLS - 2))}")
+        for t in sorted(torrent_only, key=str.lower):
+            print(f"  {blue(t)}")
+
+    return len(matched_pairs), len(studio_only), len(torrent_only)
+
+
+def print_undated(ex_undated, tr_undated):
+    section("LIVE COLLECTION NON-SHOW ITEMS",
+            "Live Bait, LP on LP, compilations from your live path — matched by eye",
+            fg="90")
+
+    ex_w = max(len("YOUR LIVE COLLECTION"), max((len(s) for s in ex_undated), default=0))
+    tr_w = max(len("TORRENT"),              max((len(s) for s in tr_undated), default=0))
+
+    print(f"  {bold(pad('YOUR LIVE COLLECTION', ex_w))}  {bold('TORRENT')}")
+    print(f"  {gray(hr('─', ex_w))}  {gray(hr('─', tr_w))}")
+
+    rows = max(len(ex_undated), len(tr_undated))
+    for i in range(rows):
+        ex_raw = ex_undated[i] if i < len(ex_undated) else ""
+        tr_raw = tr_undated[i] if i < len(tr_undated) else ""
+        print(f"  {dim(pad(ex_raw, ex_w))}  {dim(tr_raw)}")
+
+
+def print_summary(matched, ex_only, tr_only, ex_undated, tr_undated,
+                  st_matched, st_only, st_tr_only):
+    section("SUMMARY", fg="97")
+
+    w = 40
+    rows = [
+        ("── LIVE SHOWS ──────────────────────", "",   ""),
+        ("Matched (torrent is canonical):",      green(str(len(matched))),   ""),
+        ("Only in your collection:",             yellow(str(len(ex_only))),  "keep — not in torrent"),
+        ("Only in torrent (new):",               blue(str(len(tr_only))),    "available to add"),
+        ("",                                     "",   ""),
+        ("── STUDIO ALBUMS ───────────────────", "",   ""),
+        ("Matched (torrent is canonical):",      green(str(st_matched)),     ""),
+        ("Only in your studio collection:",      yellow(str(st_only)),       "keep — not in torrent"),
+        ("Torrent non-show unmatched items:",    blue(str(st_tr_only)),      "live compilations, extras"),
+        ("",                                     "",   ""),
+        ("── NON-SHOW (live collection path) ─", "",   ""),
+        ("Items in your live path:",             dim(str(len(ex_undated))),  ""),
+        ("Items in torrent:",                    dim(str(len(tr_undated))),  ""),
+    ]
+    for label, value, note in rows:
+        if not label and not value:
+            print()
+            continue
+        if not value:
+            print(f"  {gray(bold(label))}")
+            continue
+        note_part = f"  {gray(note)}" if note else ""
+        print(f"  {bold(pad(label, w))}  {value}{note_part}")
+
+    print()
+    print(f"  {bold('Canonical rule:')} the torrent carries official LivePhish FLAC")
+    print(f"  releases — the {green('[####]')} suffix is the LivePhish release ID.")
+    print(f"  When a show or album exists in both, {green('prefer the torrent copy')}.")
+    print()
+
+# ── Entry point ───────────────────────────────────────────────────────────────
+
+def main():
+    existing_path = DEFAULT_EXISTING
+    torrent_path  = DEFAULT_TORRENT
+    studio_path   = DEFAULT_STUDIO
+
+    args = sys.argv[1:]
+    i = 0
+    while i < len(args):
+        if args[i] in ("-e", "--existing") and i + 1 < len(args):
+            existing_path = Path(args[i + 1]); i += 2
+        elif args[i] in ("-t", "--torrent") and i + 1 < len(args):
+            torrent_path = Path(args[i + 1]); i += 2
+        elif args[i] in ("-s", "--studio") and i + 1 < len(args):
+            studio_path = Path(args[i + 1]); i += 2
+        elif args[i] in ("-h", "--help"):
+            print(__doc__)
+            sys.exit(0)
+        else:
+            print(f"Unknown argument: {args[i]}", file=sys.stderr)
+            sys.exit(1)
+
+    print_header(existing_path, torrent_path, studio_path)
+
+    ex_dated, ex_undated = load(existing_path, date_from_existing)
+    tr_dated, tr_undated = load(torrent_path,  date_from_torrent)
+    studio_albums        = load_studio(studio_path)
+
+    ex_dates      = set(ex_dated.keys())
+    tr_dates      = set(tr_dated.keys())
+    matched_dates = sorted(ex_dates & tr_dates)
+    ex_only_dates = sorted(ex_dates - tr_dates)
+    tr_only_dates = sorted(tr_dates - ex_dates)
+
+    print_stats(ex_dates, tr_dates, matched_dates, ex_only_dates, tr_only_dates)
+    print_matches(matched_dates, ex_dated, tr_dated)
+    print_one_sided(ex_only_dates, ex_dated,
+                    "YOUR COLLECTION", "keep these — not present in torrent",
+                    yellow, "93")
+    print_one_sided(tr_only_dates, tr_dated,
+                    "TORRENT", "new content the torrent brings",
+                    blue, "94")
+    st_matched, st_only, st_tr_only = print_studio(studio_albums, tr_undated)
+    print_undated(ex_undated, tr_undated)
+    print_summary(matched_dates, ex_only_dates, tr_only_dates, ex_undated, tr_undated,
+                  st_matched, st_only, st_tr_only)
+
+
+if __name__ == "__main__":
+    main()

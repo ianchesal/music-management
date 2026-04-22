@@ -54,11 +54,6 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install ShellCheck
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y shellcheck
-
       - name: Run ShellCheck on sync scripts
         run: |
           find sync -name "*.sh" -o -name "music-sync" -o -name "sync-*-to-plex" | xargs shellcheck -e SC1091
