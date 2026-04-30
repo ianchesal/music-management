@@ -186,6 +186,27 @@ def phase_replace_matched(torrent_path: Path, existing_path: Path,
     return count
 
 
+def phase_rename_existing(existing_path: Path, ex_only_dates: list,
+                           ex_dated: dict, dry_run: bool) -> int:
+    count = 0
+    for date in ex_only_dates:
+        for dirname in ex_dated[date]:
+            if dirname.startswith(f"Phish-{date}."):
+                continue
+            new_name = existing_to_torrent_name(dirname, date)
+            src = existing_path / dirname
+            dst = existing_path / new_name
+            if src == dst:
+                continue
+            if dry_run:
+                print(f"  [Phase 4 - DRY RUN] mv {dirname} → {new_name}")
+            else:
+                print(f"  [Phase 4] Renaming  {dirname} → {new_name}")
+                src.rename(dst)
+            count += 1
+    return count
+
+
 def parse_args(argv):
     existing_path = DEFAULT_EXISTING
     torrent_path  = DEFAULT_TORRENT

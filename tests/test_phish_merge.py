@@ -314,3 +314,38 @@ class TestPhaseReplaceMatched:
         assert not (existing / "2009-11-27 Albany, NY").exists()
         assert not (existing / ex_dir2).exists()
         assert (existing / tr_dir).exists()
+
+
+class TestPhaseRenameExisting:
+    def test_dry_run_prints_and_touches_nothing(self, tmp_path, capsys):
+        ex_dir = "2009-11-27 Albany, NY"
+        (tmp_path / ex_dir).mkdir()
+        ex_dated = {"2009-11-27": [ex_dir]}
+
+        pm.phase_rename_existing(tmp_path, ["2009-11-27"], ex_dated, dry_run=True)
+
+        out = capsys.readouterr().out
+        assert "DRY RUN" in out
+        assert "Phish-2009-11-27.Albany.NY" in out
+        assert (tmp_path / ex_dir).exists()  # nothing moved
+
+    def test_execute_renames_directory(self, tmp_path):
+        ex_dir = "2009-11-27 Albany, NY"
+        (tmp_path / ex_dir).mkdir()
+        ex_dated = {"2009-11-27": [ex_dir]}
+
+        count = pm.phase_rename_existing(tmp_path, ["2009-11-27"], ex_dated, dry_run=False)
+
+        assert count == 1
+        assert not (tmp_path / ex_dir).exists()
+        assert (tmp_path / "Phish-2009-11-27.Albany.NY").exists()
+
+    def test_skips_already_correctly_named(self, tmp_path):
+        ex_dir = "Phish-2009-11-27.Albany.NY"
+        (tmp_path / ex_dir).mkdir()
+        ex_dated = {"2009-11-27": [ex_dir]}
+
+        count = pm.phase_rename_existing(tmp_path, ["2009-11-27"], ex_dated, dry_run=False)
+
+        assert count == 0
+        assert (tmp_path / ex_dir).exists()
