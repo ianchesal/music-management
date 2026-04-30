@@ -155,6 +155,37 @@ def phase_copy_new(torrent_path: Path, existing_path: Path,
     return count
 
 
+def phase_replace_matched(torrent_path: Path, existing_path: Path,
+                           matched_dates: list, ex_dated: dict, tr_dated: dict,
+                           dry_run: bool) -> int:
+    count = 0
+    for date in matched_dates:
+        for tr_dirname in tr_dated[date]:
+            src = torrent_path / tr_dirname
+            dst = existing_path / tr_dirname
+
+            if dst.exists():
+                print(f"  [Phase 3] SKIP copy {tr_dirname} (already exists)")
+            elif dry_run:
+                print(f"  [Phase 3 - DRY RUN] cp -r {tr_dirname} → {existing_path}/")
+            else:
+                print(f"  [Phase 3] Copying   {tr_dirname}")
+                shutil.copytree(src, dst)
+
+            for old_name in ex_dated[date]:
+                old = existing_path / old_name
+                if old == dst:
+                    continue
+                if dry_run:
+                    print(f"  [Phase 3 - DRY RUN] rm -rf {old_name}")
+                elif old.exists():
+                    print(f"  [Phase 3] Removing  {old_name}")
+                    shutil.rmtree(old)
+
+            count += 1
+    return count
+
+
 def parse_args(argv):
     existing_path = DEFAULT_EXISTING
     torrent_path  = DEFAULT_TORRENT

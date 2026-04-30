@@ -245,3 +245,72 @@ class TestPhaseCopyNew:
 
         assert count == 0
         assert "SKIP" in capsys.readouterr().out
+
+
+class TestPhaseReplaceMatched:
+    def _setup(self, tmp_path):
+        torrent  = tmp_path / "torrent"
+        existing = tmp_path / "existing"
+        existing.mkdir()
+        tr_dir = "Phish-2009-11-27.Times.Union.Center.Albany.NY.[515]"
+        ex_dir = "2009-11-27 Albany, NY"
+        tr_show = torrent / tr_dir
+        tr_show.mkdir(parents=True)
+        (tr_show / "track01.flac").write_text("flac")
+        ex_show = existing / ex_dir
+        ex_show.mkdir()
+        (ex_show / "track01.mp3").write_text("mp3")
+        return torrent, existing, tr_dir, ex_dir
+
+    def test_dry_run_prints_and_touches_nothing(self, tmp_path, capsys):
+        torrent, existing, tr_dir, ex_dir = self._setup(tmp_path)
+        ex_dated = {"2009-11-27": [ex_dir]}
+        tr_dated = {"2009-11-27": [tr_dir]}
+
+        pm.phase_replace_matched(torrent, existing, ["2009-11-27"], ex_dated, tr_dated, dry_run=True)
+
+        out = capsys.readouterr().out
+        assert "DRY RUN" in out
+        assert tr_dir in out
+        assert (existing / ex_dir).exists()  # nothing deleted
+
+    def test_execute_copies_torrent_and_removes_old(self, tmp_path):
+        torrent, existing, tr_dir, ex_dir = self._setup(tmp_path)
+        ex_dated = {"2009-11-27": [ex_dir]}
+        tr_dated = {"2009-11-27": [tr_dir]}
+
+        count = pm.phase_replace_matched(
+            torrent, existing, ["2009-11-27"], ex_dated, tr_dated, dry_run=False
+        )
+
+        assert count == 1
+        assert (existing / tr_dir / "track01.flac").exists()
+        assert not (existing / ex_dir).exists()
+
+    def test_skips_copy_if_dst_exists_but_still_removes_old(self, tmp_path):
+        torrent, existing, tr_dir, ex_dir = self._setup(tmp_path)
+        (existing / tr_dir).mkdir()  # destination already exists
+        ex_dated = {"2009-11-27": [ex_dir]}
+        tr_dated = {"2009-11-27": [tr_dir]}
+
+        pm.phase_replace_matched(
+            torrent, existing, ["2009-11-27"], ex_dated, tr_dated, dry_run=False
+        )
+
+        assert (existing / tr_dir).exists()
+        assert not (existing / ex_dir).exists()
+
+    def test_removes_all_old_dirs_for_date(self, tmp_path):
+        torrent, existing, tr_dir, _ = self._setup(tmp_path)
+        ex_dir2 = "2009-11-27 Albany NY (alt)"
+        (existing / ex_dir2).mkdir()
+        ex_dated = {"2009-11-27": ["2009-11-27 Albany, NY", ex_dir2]}
+        tr_dated = {"2009-11-27": [tr_dir]}
+
+        pm.phase_replace_matched(
+            torrent, existing, ["2009-11-27"], ex_dated, tr_dated, dry_run=False
+        )
+
+        assert not (existing / "2009-11-27 Albany, NY").exists()
+        assert not (existing / ex_dir2).exists()
+        assert (existing / tr_dir).exists()
