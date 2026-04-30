@@ -198,3 +198,50 @@ class TestPhaseBackup:
             mock_run.return_value.returncode = 1
             with pytest.raises(SystemExit):
                 pm.phase_backup(existing, nas, dry_run=False)
+
+
+class TestPhaseCopyNew:
+    def _make_show(self, parent, dirname):
+        show = parent / dirname
+        show.mkdir(parents=True)
+        (show / "track01.flac").write_text("audio")
+
+    def test_dry_run_prints_and_touches_nothing(self, tmp_path, capsys):
+        torrent  = tmp_path / "torrent"
+        existing = tmp_path / "existing"
+        existing.mkdir()
+        self._make_show(torrent, "Phish-2024-07-20.Xfinity.Center.Mansfield.MA.[2260]")
+
+        tr_dated = {"2024-07-20": ["Phish-2024-07-20.Xfinity.Center.Mansfield.MA.[2260]"]}
+        pm.phase_copy_new(torrent, existing, ["2024-07-20"], tr_dated, dry_run=True)
+
+        out = capsys.readouterr().out
+        assert "DRY RUN" in out
+        assert "Phish-2024-07-20" in out
+        assert not (existing / "Phish-2024-07-20.Xfinity.Center.Mansfield.MA.[2260]").exists()
+
+    def test_execute_copies_directory(self, tmp_path):
+        torrent  = tmp_path / "torrent"
+        existing = tmp_path / "existing"
+        existing.mkdir()
+        self._make_show(torrent, "Phish-2024-07-20.Xfinity.Center.Mansfield.MA.[2260]")
+
+        tr_dated = {"2024-07-20": ["Phish-2024-07-20.Xfinity.Center.Mansfield.MA.[2260]"]}
+        count = pm.phase_copy_new(torrent, existing, ["2024-07-20"], tr_dated, dry_run=False)
+
+        assert count == 1
+        assert (existing / "Phish-2024-07-20.Xfinity.Center.Mansfield.MA.[2260]" / "track01.flac").exists()
+
+    def test_skips_if_destination_exists(self, tmp_path, capsys):
+        torrent  = tmp_path / "torrent"
+        existing = tmp_path / "existing"
+        existing.mkdir()
+        dirname = "Phish-2024-07-20.Xfinity.Center.Mansfield.MA.[2260]"
+        self._make_show(torrent, dirname)
+        (existing / dirname).mkdir()  # already present
+
+        tr_dated = {"2024-07-20": [dirname]}
+        count = pm.phase_copy_new(torrent, existing, ["2024-07-20"], tr_dated, dry_run=False)
+
+        assert count == 0
+        assert "SKIP" in capsys.readouterr().out

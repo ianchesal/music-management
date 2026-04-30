@@ -136,6 +136,25 @@ def phase_backup(existing_path: Path, nas_path, dry_run: bool):
     print(f"  [Phase 1] Backup complete.\n")
 
 
+def phase_copy_new(torrent_path: Path, existing_path: Path,
+                   tr_only_dates: list, tr_dated: dict, dry_run: bool) -> int:
+    count = 0
+    for date in tr_only_dates:
+        for dirname in tr_dated[date]:
+            src = torrent_path / dirname
+            dst = existing_path / dirname
+            if dst.exists():
+                print(f"  [Phase 2] SKIP {dirname} (destination already exists)")
+                continue
+            if dry_run:
+                print(f"  [Phase 2 - DRY RUN] cp -r {dirname} → {existing_path}/")
+            else:
+                print(f"  [Phase 2] Copying  {dirname}")
+                shutil.copytree(src, dst)
+            count += 1
+    return count
+
+
 def parse_args(argv):
     existing_path = DEFAULT_EXISTING
     torrent_path  = DEFAULT_TORRENT
