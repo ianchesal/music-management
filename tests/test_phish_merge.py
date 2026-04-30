@@ -143,3 +143,58 @@ class TestPreflight:
         nas = tmp_path / "nas"
         nas.mkdir()
         pm.preflight(tmp_path, tmp_path, nas, execute=True)  # must not raise
+
+
+from unittest.mock import patch
+
+
+class TestPhaseBackup:
+    def test_dry_run_with_nas_prints_rsync_command(self, tmp_path, capsys):
+        existing = tmp_path / "existing"
+        existing.mkdir()
+        nas = tmp_path / "nas"
+
+        pm.phase_backup(existing, nas, dry_run=True)
+
+        out = capsys.readouterr().out
+        assert "Phase 1" in out
+        assert "DRY RUN" in out
+        assert "rsync" in out
+        assert str(existing) in out
+
+    def test_dry_run_with_none_nas_prints_placeholder(self, tmp_path, capsys):
+        existing = tmp_path / "existing"
+        existing.mkdir()
+
+        pm.phase_backup(existing, None, dry_run=True)
+
+        out = capsys.readouterr().out
+        assert "Phase 1" in out
+        assert "DRY RUN" in out
+
+    def test_execute_calls_rsync(self, tmp_path):
+        existing = tmp_path / "existing"
+        existing.mkdir()
+        nas = tmp_path / "nas"
+        nas.mkdir()
+
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            pm.phase_backup(existing, nas, dry_run=False)
+
+        mock_run.assert_called_once()
+        cmd = mock_run.call_args[0][0]
+        assert "rsync" in cmd
+        assert f"{existing}/" in cmd
+        assert str(nas) in cmd
+
+    def test_execute_exits_on_rsync_failure(self, tmp_path):
+        existing = tmp_path / "existing"
+        existing.mkdir()
+        nas = tmp_path / "nas"
+        nas.mkdir()
+
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 1
+            with pytest.raises(SystemExit):
+                pm.phase_backup(existing, nas, dry_run=False)
