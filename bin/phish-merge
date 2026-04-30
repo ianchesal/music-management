@@ -1,0 +1,95 @@
+#!/usr/bin/env python3
+"""
+phish-merge — Merge an existing Phish live show collection with a torrent download.
+
+Runs five phases in order: pre-flight, NAS backup, copy new shows, replace matched
+shows with canonical torrent copies, rename existing-only shows to torrent naming.
+
+Usage:
+  phish-merge [--dry-run]
+  phish-merge --execute --nas PATH
+  phish-merge --existing PATH --torrent PATH --execute --nas PATH
+
+Options:
+  --existing PATH   Existing live collection path
+  --torrent  PATH   Torrent directory path
+  --nas      PATH   NAS backup destination (required with --execute)
+  --dry-run         Print planned actions, touch nothing [default]
+  --execute         Perform the actual merge
+  -h, --help        Show this message
+"""
+
+import os
+import re
+import sys
+import shutil
+import subprocess
+from pathlib import Path
+from collections import defaultdict
+
+# ── Defaults ──────────────────────────────────────────────────────────────────
+
+DEFAULT_EXISTING = Path("/data/media/Sorted/Unsorted/Music/Phish")
+DEFAULT_TORRENT  = Path("/data/torrents/Phish-Live.Phish.Project-2002-2026")
+
+# ── Terminal ──────────────────────────────────────────────────────────────────
+
+try:
+    COLS = min(os.get_terminal_size().columns, 160)
+except OSError:
+    COLS = 120
+
+USE_COLOR = sys.stdout.isatty()
+
+def _ansi(code, s):
+    return f"\033[{code}m{s}\033[0m" if USE_COLOR else s
+
+def bold(s):   return _ansi("1",  s)
+def dim(s):    return _ansi("2",  s)
+def red(s):    return _ansi("91", s)
+def green(s):  return _ansi("92", s)
+def yellow(s): return _ansi("93", s)
+
+
+def parse_args(argv):
+    existing_path = DEFAULT_EXISTING
+    torrent_path  = DEFAULT_TORRENT
+    nas_path      = None
+    dry_run       = True
+
+    args = argv[1:]
+    i = 0
+    while i < len(args):
+        if args[i] in ("-e", "--existing") and i + 1 < len(args):
+            existing_path = Path(args[i + 1]); i += 2
+        elif args[i] in ("-t", "--torrent") and i + 1 < len(args):
+            torrent_path = Path(args[i + 1]); i += 2
+        elif args[i] in ("-n", "--nas") and i + 1 < len(args):
+            nas_path = Path(args[i + 1]); i += 2
+        elif args[i] == "--dry-run":
+            dry_run = True; i += 1
+        elif args[i] == "--execute":
+            dry_run = False; i += 1
+        elif args[i] in ("-h", "--help"):
+            print(__doc__)
+            sys.exit(0)
+        else:
+            print(f"Unknown argument: {args[i]}", file=sys.stderr)
+            sys.exit(1)
+
+    return existing_path, torrent_path, nas_path, dry_run
+
+
+def main():
+    existing_path, torrent_path, nas_path, dry_run = parse_args(sys.argv)
+    mode = "DRY RUN" if dry_run else "EXECUTE"
+    print(f"\n  {bold('PHISH MERGE')}  [{mode}]")
+    print(f"  {dim('Existing:')}  {existing_path}")
+    print(f"  {dim('Torrent: ')}  {torrent_path}")
+    if not dry_run:
+        print(f"  {dim('NAS:     ')}  {nas_path}")
+    print()
+
+
+if __name__ == "__main__":
+    main()
