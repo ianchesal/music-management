@@ -89,6 +89,17 @@ def load(path: Path, extractor):
     return dated, undated
 
 
+def existing_to_torrent_name(dirname: str, date: str) -> str:
+    """Convert an existing-style dirname to Phish-YYYY-MM-DD.Dot.Separated.Location."""
+    name = dirname
+    name = re.sub(r'^\d{4}[-_]\d{1,2}[-_]\d{1,2}\s*', '', name)  # strip YYYY[-_]MM[-_]DD
+    name = re.sub(r'^\d{1,2}_\d{1,2}_\d{4}\s*', '', name)         # strip M_DD_YYYY
+    name = re.sub(r'^-\s*', '', name).strip()                       # strip leading ' - '
+    name = name.replace(',', '')                                    # remove commas
+    name = re.sub(r'\s+', '.', name.strip()).strip('.')             # spaces → dots
+    return f"Phish-{date}.{name}"
+
+
 def parse_args(argv):
     existing_path = DEFAULT_EXISTING
     torrent_path  = DEFAULT_TORRENT

@@ -90,3 +90,30 @@ class TestLoad:
     def test_missing_path_exits(self, tmp_path):
         with pytest.raises(SystemExit):
             pm.load(tmp_path / "nonexistent", pm.date_from_existing)
+
+
+class TestExistingToTorrentName:
+    def test_simple_city_state(self):
+        assert pm.existing_to_torrent_name(
+            "2009-11-27 Albany, NY", "2009-11-27"
+        ) == "Phish-2009-11-27.Albany.NY"
+
+    def test_with_dash_separator(self):
+        assert pm.existing_to_torrent_name(
+            "1995-06-19 - Deer Creek Music Center, Noblesville, IN", "1995-06-19"
+        ) == "Phish-1995-06-19.Deer.Creek.Music.Center.Noblesville.IN"
+
+    def test_underscore_date(self):
+        assert pm.existing_to_torrent_name(
+            "2024_07_20 Mansfield, MA", "2024-07-20"
+        ) == "Phish-2024-07-20.Mansfield.MA"
+
+    def test_single_digit_day(self):
+        assert pm.existing_to_torrent_name(
+            "1994_12_6 Goleta, CA", "1994-12-06"
+        ) == "Phish-1994-12-06.Goleta.CA"
+
+    def test_legacy_m_dd_yyyy(self):
+        assert pm.existing_to_torrent_name(
+            "7_13_1994 Big Birch Concert Theatre, Patterson, NY", "1994-07-13"
+        ) == "Phish-1994-07-13.Big.Birch.Concert.Theatre.Patterson.NY"
