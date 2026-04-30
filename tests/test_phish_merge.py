@@ -117,3 +117,29 @@ class TestExistingToTorrentName:
         assert pm.existing_to_torrent_name(
             "7_13_1994 Big Birch Concert Theatre, Patterson, NY", "1994-07-13"
         ) == "Phish-1994-07-13.Big.Birch.Concert.Theatre.Patterson.NY"
+
+
+class TestPreflight:
+    def test_missing_existing_path_exits(self, tmp_path):
+        with pytest.raises(SystemExit):
+            pm.preflight(tmp_path / "nonexistent", tmp_path, None, execute=False)
+
+    def test_missing_torrent_path_exits(self, tmp_path):
+        with pytest.raises(SystemExit):
+            pm.preflight(tmp_path, tmp_path / "nonexistent", None, execute=False)
+
+    def test_execute_without_nas_exits(self, tmp_path):
+        with pytest.raises(SystemExit):
+            pm.preflight(tmp_path, tmp_path, None, execute=True)
+
+    def test_execute_with_missing_nas_exits(self, tmp_path):
+        with pytest.raises(SystemExit):
+            pm.preflight(tmp_path, tmp_path, tmp_path / "nonexistent", execute=True)
+
+    def test_valid_dry_run_does_not_exit(self, tmp_path):
+        pm.preflight(tmp_path, tmp_path, None, execute=False)  # must not raise
+
+    def test_valid_execute_does_not_exit(self, tmp_path):
+        nas = tmp_path / "nas"
+        nas.mkdir()
+        pm.preflight(tmp_path, tmp_path, nas, execute=True)  # must not raise
