@@ -51,6 +51,44 @@ def green(s):  return _ansi("92", s)
 def yellow(s): return _ansi("93", s)
 
 
+# ── Date extraction ────────────────────────────────────────────────────────────
+
+def date_from_existing(name: str):
+    m = re.match(r'^(\d{4})[-_](\d{1,2})[-_](\d{1,2})', name)
+    if m:
+        y, mo, d = m.group(1), int(m.group(2)), int(m.group(3))
+        return f"{y}-{mo:02d}-{d:02d}"
+    m = re.match(r'^(\d{1,2})_(\d{1,2})_(\d{4})\b', name)
+    if m:
+        mo, d, y = int(m.group(1)), int(m.group(2)), m.group(3)
+        return f"{y}-{mo:02d}-{d:02d}"
+    return None
+
+
+def date_from_torrent(name: str):
+    m = re.match(r'^Phish-(\d{4})-(\d{2})-(\d{2})\.', name)
+    if m:
+        return f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
+    return None
+
+
+def load(path: Path, extractor):
+    dated   = defaultdict(list)
+    undated = []
+    if not path.exists():
+        print(f"  {red('Error:')} path does not exist: {path}", file=sys.stderr)
+        sys.exit(1)
+    for entry in sorted(path.iterdir(), key=lambda e: e.name.lower()):
+        if entry.name.startswith('.') or not entry.is_dir():
+            continue
+        date = extractor(entry.name)
+        if date:
+            dated[date].append(entry.name)
+        else:
+            undated.append(entry.name)
+    return dated, undated
+
+
 def parse_args(argv):
     existing_path = DEFAULT_EXISTING
     torrent_path  = DEFAULT_TORRENT
