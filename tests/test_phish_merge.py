@@ -349,3 +349,62 @@ class TestPhaseRenameExisting:
 
         assert count == 0
         assert (tmp_path / ex_dir).exists()
+
+
+class TestEndToEnd:
+    def _build_collection(self, tmp_path):
+        existing = tmp_path / "existing"
+        torrent  = tmp_path / "torrent"
+        existing.mkdir()
+        torrent.mkdir()
+
+        # Matched show: in both collections
+        (existing / "2009-11-27 Albany, NY").mkdir()
+        tr_matched = torrent / "Phish-2009-11-27.Times.Union.Center.Albany.NY.[515]"
+        tr_matched.mkdir()
+        (tr_matched / "track01.flac").write_text("flac")
+
+        # Torrent-only show
+        tr_new = torrent / "Phish-2024-07-20.Xfinity.Center.Mansfield.MA.[2260]"
+        tr_new.mkdir()
+        (tr_new / "track01.flac").write_text("flac")
+
+        # Existing-only show
+        (existing / "1995-06-19 - Deer Creek Music Center, Noblesville, IN").mkdir()
+
+        return existing, torrent
+
+    def test_dry_run_covers_all_phases_and_touches_nothing(self, tmp_path, capsys):
+        existing, torrent = self._build_collection(tmp_path)
+
+        pm.main_logic(existing, torrent, nas_path=None, dry_run=True)
+
+        out = capsys.readouterr().out
+        assert "Phase 1" in out
+        assert "Phase 2" in out
+        assert "Phase 3" in out
+        assert "Phase 4" in out
+        assert "DRY RUN" in out
+        # Disk untouched
+        assert (existing / "2009-11-27 Albany, NY").exists()
+        assert (existing / "1995-06-19 - Deer Creek Music Center, Noblesville, IN").exists()
+        assert not (existing / "Phish-2009-11-27.Times.Union.Center.Albany.NY.[515]").exists()
+
+    def test_execute_performs_full_merge(self, tmp_path, capsys):
+        existing, torrent = self._build_collection(tmp_path)
+        nas = tmp_path / "nas"
+        nas.mkdir()
+
+        from unittest.mock import patch
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            pm.main_logic(existing, torrent, nas_path=nas, dry_run=False)
+
+        # Torrent-only show was copied
+        assert (existing / "Phish-2024-07-20.Xfinity.Center.Mansfield.MA.[2260]" / "track01.flac").exists()
+        # Matched show: torrent canonical present, old gone
+        assert (existing / "Phish-2009-11-27.Times.Union.Center.Albany.NY.[515]" / "track01.flac").exists()
+        assert not (existing / "2009-11-27 Albany, NY").exists()
+        # Existing-only show was renamed
+        assert not (existing / "1995-06-19 - Deer Creek Music Center, Noblesville, IN").exists()
+        assert (existing / "Phish-1995-06-19.Deer.Creek.Music.Center.Noblesville.IN").exists()

@@ -207,6 +207,44 @@ def phase_rename_existing(existing_path: Path, ex_only_dates: list,
     return count
 
 
+def phase_summary(new_count: int, replaced_count: int, renamed_count: int,
+                  existing_path: Path, dry_run: bool):
+    mode = "DRY RUN — would have" if dry_run else "Complete."
+    print(f"\n  {bold('SUMMARY')}  [{mode}]")
+    print(f"  {green(str(new_count))}  shows copied from torrent (new)")
+    print(f"  {green(str(replaced_count))}  shows replaced with torrent canonical copy")
+    print(f"  {yellow(str(renamed_count))}  existing-only shows renamed to torrent style")
+    if not dry_run:
+        print()
+        print(f"  {bold('Next step:')} trigger a Plex library scan for:")
+        print(f"    {existing_path}")
+        print()
+        print(f"  {bold('Important:')} do not run `music-sync phish` again.")
+        print(f"  tranquility is now the source of truth for the Phish collection.")
+    print()
+
+
+def main_logic(existing_path: Path, torrent_path: Path, nas_path, dry_run: bool):
+    ex_dated, _ex_undated = load(existing_path, date_from_existing)
+    tr_dated, _tr_undated = load(torrent_path,  date_from_torrent)
+
+    ex_dates      = set(ex_dated.keys())
+    tr_dates      = set(tr_dated.keys())
+    matched_dates = sorted(ex_dates & tr_dates)
+    ex_only_dates = sorted(ex_dates - tr_dates)
+    tr_only_dates = sorted(tr_dates - ex_dates)
+
+    print(f"  {len(ex_dates)} existing  ·  {len(tr_dates)} torrent  ·  "
+          f"{len(matched_dates)} matched  ·  {len(ex_only_dates)} existing-only  ·  "
+          f"{len(tr_only_dates)} torrent-only\n")
+
+    phase_backup(existing_path, nas_path, dry_run)
+    new_count      = phase_copy_new(torrent_path, existing_path, tr_only_dates, tr_dated, dry_run)
+    replaced_count = phase_replace_matched(torrent_path, existing_path, matched_dates, ex_dated, tr_dated, dry_run)
+    renamed_count  = phase_rename_existing(existing_path, ex_only_dates, ex_dated, dry_run)
+    phase_summary(new_count, replaced_count, renamed_count, existing_path, dry_run)
+
+
 def parse_args(argv):
     existing_path = DEFAULT_EXISTING
     torrent_path  = DEFAULT_TORRENT
@@ -252,6 +290,7 @@ def main():
         print(f"  {dim('NAS:     ')}  {nas_path}")
     print()
     preflight(existing_path, torrent_path, nas_path, not dry_run)
+    main_logic(existing_path, torrent_path, nas_path, dry_run)
 
 
 if __name__ == "__main__":
