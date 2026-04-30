@@ -272,7 +272,8 @@ class TestPhaseReplaceMatched:
         out = capsys.readouterr().out
         assert "DRY RUN" in out
         assert tr_dir in out
-        assert (existing / ex_dir).exists()  # nothing deleted
+        assert (existing / ex_dir).exists()       # nothing deleted
+        assert not (existing / tr_dir).exists()   # nothing copied
 
     def test_execute_copies_torrent_and_removes_old(self, tmp_path):
         torrent, existing, tr_dir, ex_dir = self._setup(tmp_path)
