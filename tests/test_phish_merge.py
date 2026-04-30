@@ -39,6 +39,10 @@ class TestDateFromExisting:
     def test_no_match_returns_none(self):
         assert pm.date_from_existing("Live Bait Vol 10") is None
 
+    def test_legacy_m_dd_yyyy_dash_not_supported(self):
+        # legacy format only supports underscore separators, not dashes
+        assert pm.date_from_existing("7-13-1994 Big Birch Concert Theatre") is None
+
 
 class TestDateFromTorrent:
     def test_standard_format(self):
@@ -68,6 +72,15 @@ class TestLoad:
     def test_skips_dotfiles(self, tmp_path):
         (tmp_path / ".DS_Store").mkdir()
         (tmp_path / "2024_07_20 Mansfield, MA").mkdir()
+
+        dated, undated = pm.load(tmp_path, pm.date_from_existing)
+
+        assert len(dated) == 1
+        assert len(undated) == 0
+
+    def test_skips_plain_files(self, tmp_path):
+        (tmp_path / "2024_07_20 Mansfield, MA").mkdir()
+        (tmp_path / "README.txt").write_text("notes")  # plain file, not a dir
 
         dated, undated = pm.load(tmp_path, pm.date_from_existing)
 
