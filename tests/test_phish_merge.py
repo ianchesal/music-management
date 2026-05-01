@@ -145,6 +145,40 @@ class TestPreflight:
         pm.preflight(tmp_path, tmp_path, nas, execute=True)  # must not raise
 
 
+class TestParseArgsPhase:
+    def test_no_phase_returns_none(self):
+        _, _, _, _, phase = pm.parse_args(["phish-merge"])
+        assert phase is None
+
+    def test_phase_flag_returns_integer(self):
+        _, _, _, _, phase = pm.parse_args(["phish-merge", "--phase", "2"])
+        assert phase == 2
+
+    def test_phase_one_accepted(self):
+        _, _, _, _, phase = pm.parse_args(["phish-merge", "--phase", "1"])
+        assert phase == 1
+
+    def test_phase_four_accepted(self):
+        _, _, _, _, phase = pm.parse_args(["phish-merge", "--phase", "4"])
+        assert phase == 4
+
+    def test_phase_zero_exits(self):
+        with pytest.raises(SystemExit):
+            pm.parse_args(["phish-merge", "--phase", "0"])
+
+    def test_phase_five_exits(self):
+        with pytest.raises(SystemExit):
+            pm.parse_args(["phish-merge", "--phase", "5"])
+
+    def test_phase_non_integer_exits(self):
+        with pytest.raises(SystemExit):
+            pm.parse_args(["phish-merge", "--phase", "backup"])
+
+    def test_missing_phase_value_exits(self):
+        with pytest.raises(SystemExit):
+            pm.parse_args(["phish-merge", "--phase"])
+
+
 from unittest.mock import patch
 
 
@@ -409,3 +443,73 @@ class TestEndToEnd:
         # Existing-only show was renamed
         assert not (existing / "1995-06-19 - Deer Creek Music Center, Noblesville, IN").exists()
         assert (existing / "Phish-1995-06-19.Deer.Creek.Music.Center.Noblesville.IN").exists()
+
+
+class TestMainLogicPhaseFilter:
+    def _build_collection(self, tmp_path):
+        existing = tmp_path / "existing"
+        torrent  = tmp_path / "torrent"
+        existing.mkdir()
+        torrent.mkdir()
+        (existing / "2009-11-27 Albany, NY").mkdir()
+        tr_matched = torrent / "Phish-2009-11-27.Times.Union.Center.Albany.NY.[515]"
+        tr_matched.mkdir()
+        (tr_matched / "track01.flac").write_text("flac")
+        tr_new = torrent / "Phish-2024-07-20.Xfinity.Center.Mansfield.MA.[2260]"
+        tr_new.mkdir()
+        (tr_new / "track01.flac").write_text("flac")
+        (existing / "1995-06-19 - Deer Creek Music Center, Noblesville, IN").mkdir()
+        return existing, torrent
+
+    def test_no_phase_runs_all_phases(self, tmp_path, capsys):
+        existing, torrent = self._build_collection(tmp_path)
+        pm.main_logic(existing, torrent, nas_path=None, dry_run=True, phase=None)
+        out = capsys.readouterr().out
+        assert "Phase 1" in out
+        assert "Phase 2" in out
+        assert "Phase 3" in out
+        assert "Phase 4" in out
+
+    def test_phase_1_runs_only_backup(self, tmp_path, capsys):
+        existing, torrent = self._build_collection(tmp_path)
+        pm.main_logic(existing, torrent, nas_path=None, dry_run=True, phase=1)
+        out = capsys.readouterr().out
+        assert "Phase 1" in out
+        assert "Phase 2" not in out
+        assert "Phase 3" not in out
+        assert "Phase 4" not in out
+
+    def test_phase_2_runs_only_copy_new(self, tmp_path, capsys):
+        existing, torrent = self._build_collection(tmp_path)
+        pm.main_logic(existing, torrent, nas_path=None, dry_run=True, phase=2)
+        out = capsys.readouterr().out
+        assert "Phase 2" in out
+        assert "Phase 1" not in out
+        assert "Phase 3" not in out
+        assert "Phase 4" not in out
+
+    def test_phase_3_runs_only_replace_matched(self, tmp_path, capsys):
+        existing, torrent = self._build_collection(tmp_path)
+        pm.main_logic(existing, torrent, nas_path=None, dry_run=True, phase=3)
+        out = capsys.readouterr().out
+        assert "Phase 3" in out
+        assert "Phase 1" not in out
+        assert "Phase 2" not in out
+        assert "Phase 4" not in out
+
+    def test_phase_4_runs_only_rename_existing(self, tmp_path, capsys):
+        existing, torrent = self._build_collection(tmp_path)
+        pm.main_logic(existing, torrent, nas_path=None, dry_run=True, phase=4)
+        out = capsys.readouterr().out
+        assert "Phase 4" in out
+        assert "Phase 1" not in out
+        assert "Phase 2" not in out
+        assert "Phase 3" not in out
+
+    def test_phase_4_execute_only_renames(self, tmp_path):
+        existing, torrent = self._build_collection(tmp_path)
+        pm.main_logic(existing, torrent, nas_path=None, dry_run=False, phase=4)
+        assert (existing / "Phish-1995-06-19.Deer.Creek.Music.Center.Noblesville.IN").exists()
+        assert not (existing / "1995-06-19 - Deer Creek Music Center, Noblesville, IN").exists()
+        assert not (existing / "Phish-2024-07-20.Xfinity.Center.Mansfield.MA.[2260]").exists()
+        assert (existing / "2009-11-27 Albany, NY").exists()
