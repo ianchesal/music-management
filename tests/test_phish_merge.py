@@ -145,6 +145,40 @@ class TestPreflight:
         pm.preflight(tmp_path, tmp_path, nas, execute=True)  # must not raise
 
 
+class TestParseArgsPhase:
+    def test_no_phase_returns_none(self):
+        _, _, _, _, phase = pm.parse_args(["phish-merge"])
+        assert phase is None
+
+    def test_phase_flag_returns_integer(self):
+        _, _, _, _, phase = pm.parse_args(["phish-merge", "--phase", "2"])
+        assert phase == 2
+
+    def test_phase_one_accepted(self):
+        _, _, _, _, phase = pm.parse_args(["phish-merge", "--phase", "1"])
+        assert phase == 1
+
+    def test_phase_four_accepted(self):
+        _, _, _, _, phase = pm.parse_args(["phish-merge", "--phase", "4"])
+        assert phase == 4
+
+    def test_phase_zero_exits(self):
+        with pytest.raises(SystemExit):
+            pm.parse_args(["phish-merge", "--phase", "0"])
+
+    def test_phase_five_exits(self):
+        with pytest.raises(SystemExit):
+            pm.parse_args(["phish-merge", "--phase", "5"])
+
+    def test_phase_non_integer_exits(self):
+        with pytest.raises(SystemExit):
+            pm.parse_args(["phish-merge", "--phase", "backup"])
+
+    def test_missing_phase_value_exits(self):
+        with pytest.raises(SystemExit):
+            pm.parse_args(["phish-merge", "--phase"])
+
+
 from unittest.mock import patch
 
 

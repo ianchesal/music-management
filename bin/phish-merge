@@ -250,6 +250,7 @@ def parse_args(argv):
     torrent_path  = DEFAULT_TORRENT
     nas_path      = None
     dry_run       = True
+    phase         = None
 
     args = argv[1:]
     i = 0
@@ -266,6 +267,18 @@ def parse_args(argv):
             if i + 1 >= len(args):
                 print(f"Missing value for {args[i]}", file=sys.stderr); sys.exit(1)
             nas_path = Path(args[i + 1]); i += 2
+        elif args[i] == "--phase":
+            if i + 1 >= len(args):
+                print(f"Missing value for {args[i]}", file=sys.stderr); sys.exit(1)
+            try:
+                phase = int(args[i + 1])
+            except ValueError:
+                print(f"--phase requires an integer 1-4, got: {args[i+1]}", file=sys.stderr)
+                sys.exit(1)
+            if phase not in (1, 2, 3, 4):
+                print(f"--phase must be 1-4, got: {phase}", file=sys.stderr)
+                sys.exit(1)
+            i += 2
         elif args[i] == "--dry-run":
             dry_run = True; i += 1
         elif args[i] == "--execute":
@@ -277,7 +290,7 @@ def parse_args(argv):
             print(f"Unknown argument: {args[i]}", file=sys.stderr)
             sys.exit(1)
 
-    return existing_path, torrent_path, nas_path, dry_run
+    return existing_path, torrent_path, nas_path, dry_run, phase
 
 
 def main():
