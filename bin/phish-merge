@@ -1,0 +1,297 @@
+#!/usr/bin/env python3
+"""
+phish-merge — Merge an existing Phish live show collection with a torrent download.
+
+Runs five phases in order: pre-flight, NAS backup, copy new shows, replace matched
+shows with canonical torrent copies, rename existing-only shows to torrent naming.
+
+Usage:
+  phish-merge [--dry-run]
+  phish-merge --execute --nas PATH
+  phish-merge --existing PATH --torrent PATH --execute --nas PATH
+
+Options:
+  -e, --existing PATH   Existing live collection path
+  -t, --torrent  PATH   Torrent directory path
+      --nas      PATH   NAS backup destination (required with --execute)
+      --dry-run         Print planned actions, touch nothing [default]
+      --execute         Perform the actual merge
+  -h, --help            Show this message
+"""
+
+import os
+import re
+import sys
+import shutil
+import subprocess
+from pathlib import Path
+from collections import defaultdict
+
+# ── Defaults ──────────────────────────────────────────────────────────────────
+
+DEFAULT_EXISTING = Path("/data/media/Sorted/Unsorted/Music/Phish")
+DEFAULT_TORRENT  = Path("/data/torrents/Phish-Live.Phish.Project-2002-2026")
+
+# ── Terminal ──────────────────────────────────────────────────────────────────
+
+try:
+    COLS = min(os.get_terminal_size().columns, 160)
+except OSError:
+    COLS = 120
+
+USE_COLOR = sys.stdout.isatty()
+
+def _ansi(code, s):
+    return f"\033[{code}m{s}\033[0m" if USE_COLOR else s
+
+def bold(s):   return _ansi("1",  s)
+def dim(s):    return _ansi("2",  s)
+def red(s):    return _ansi("91", s)
+def green(s):  return _ansi("92", s)
+def yellow(s): return _ansi("93", s)
+
+
+# ── Date extraction ────────────────────────────────────────────────────────────
+
+def date_from_existing(name: str):
+    m = re.match(r'^(\d{4})[-_](\d{1,2})[-_](\d{1,2})', name)
+    if m:
+        y, mo, d = m.group(1), int(m.group(2)), int(m.group(3))
+        return f"{y}-{mo:02d}-{d:02d}"
+    m = re.match(r'^(\d{1,2})_(\d{1,2})_(\d{4})\b', name)
+    if m:
+        mo, d, y = int(m.group(1)), int(m.group(2)), m.group(3)
+        return f"{y}-{mo:02d}-{d:02d}"
+    return None
+
+
+def date_from_torrent(name: str):
+    m = re.match(r'^Phish-(\d{4})-(\d{2})-(\d{2})\.', name)
+    if m:
+        return f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
+    return None
+
+
+def load(path: Path, extractor):
+    dated   = defaultdict(list)
+    undated = []
+    if not path.exists():
+        print(f"  {red('Error:')} path does not exist: {path}", file=sys.stderr)
+        sys.exit(1)
+    for entry in sorted(path.iterdir(), key=lambda e: e.name.lower()):
+        if entry.name.startswith('.') or not entry.is_dir():
+            continue
+        date = extractor(entry.name)
+        if date:
+            dated[date].append(entry.name)
+        else:
+            undated.append(entry.name)
+    return dated, undated
+
+
+def existing_to_torrent_name(dirname: str, date: str) -> str:
+    """Convert an existing-style dirname to Phish-YYYY-MM-DD.Dot.Separated.Location."""
+    name = dirname
+    name = re.sub(r'^\d{4}[-_]\d{1,2}[-_]\d{1,2}[-_]?\s*', '', name)  # strip YYYY[-_]MM[-_]DD[_]
+    name = re.sub(r'^\d{1,2}_\d{1,2}_\d{4}\s*', '', name)         # strip M_DD_YYYY
+    name = re.sub(r'^-\s*', '', name).strip()                       # strip leading ' - '
+    name = name.replace(',', '')                                    # remove commas
+    name = re.sub(r'\s+', '.', name.strip()).strip('.')             # spaces → dots
+    return f"Phish-{date}.{name}"
+
+
+def preflight(existing_path: Path, torrent_path: Path, nas_path, execute: bool):
+    errors = []
+    if not existing_path.exists():
+        errors.append(f"Existing path does not exist: {existing_path}")
+    if not torrent_path.exists():
+        errors.append(f"Torrent path does not exist: {torrent_path}")
+    if execute:
+        if nas_path is None:
+            errors.append("--nas PATH is required with --execute")
+        elif not Path(nas_path).exists():
+            errors.append(f"NAS path does not exist: {nas_path}")
+    if errors:
+        for e in errors:
+            print(f"  {red('Error:')} {e}", file=sys.stderr)
+        sys.exit(1)
+
+
+def phase_backup(existing_path: Path, nas_path, dry_run: bool):
+    if dry_run:
+        if nas_path is None:
+            print("  [Phase 1 - DRY RUN] Would rsync existing → <nas-path> (provide --nas with --execute)")
+        else:
+            cmd = ["rsync", "--archive", "--verbose", "--progress", "--human-readable",
+                   f"{existing_path}/", str(nas_path)]
+            print(f"  [Phase 1 - DRY RUN] Would run: {' '.join(cmd)}")
+        return
+    cmd = ["rsync", "--archive", "--verbose", "--progress", "--human-readable",
+           f"{existing_path}/", str(nas_path)]
+    print(f"  [Phase 1] Backing up {existing_path} → {nas_path} ...")
+    result = subprocess.run(cmd)
+    if result.returncode != 0:
+        print(f"  {red('Error:')} rsync failed (exit {result.returncode})", file=sys.stderr)
+        sys.exit(1)
+    print(f"  [Phase 1] Backup complete.\n")
+
+
+def phase_copy_new(torrent_path: Path, existing_path: Path,
+                   tr_only_dates: list, tr_dated: dict, dry_run: bool) -> int:
+    count = 0
+    for date in tr_only_dates:
+        for dirname in tr_dated[date]:
+            src = torrent_path / dirname
+            dst = existing_path / dirname
+            if dst.exists():
+                print(f"  [Phase 2] SKIP {dirname} (destination already exists)")
+                continue
+            if dry_run:
+                print(f"  [Phase 2 - DRY RUN] cp -r {dirname} → {existing_path}/")
+            else:
+                print(f"  [Phase 2] Copying  {dirname}")
+                shutil.copytree(src, dst)
+            count += 1
+    return count
+
+
+def phase_replace_matched(torrent_path: Path, existing_path: Path,
+                           matched_dates: list, ex_dated: dict, tr_dated: dict,
+                           dry_run: bool) -> int:
+    count = 0
+    for date in matched_dates:
+        for tr_dirname in tr_dated[date]:
+            src = torrent_path / tr_dirname
+            dst = existing_path / tr_dirname
+
+            if dst.exists():
+                print(f"  [Phase 3] SKIP copy {tr_dirname} (already exists)")
+            elif dry_run:
+                print(f"  [Phase 3 - DRY RUN] cp -r {tr_dirname} → {existing_path}/")
+            else:
+                print(f"  [Phase 3] Copying   {tr_dirname}")
+                shutil.copytree(src, dst)
+
+            for old_name in ex_dated[date]:
+                old = existing_path / old_name
+                if old == dst:
+                    continue
+                if dry_run:
+                    print(f"  [Phase 3 - DRY RUN] rm -rf {old_name}")
+                elif old.exists():
+                    print(f"  [Phase 3] Removing  {old_name}")
+                    shutil.rmtree(old)
+
+            count += 1
+    return count
+
+
+def phase_rename_existing(existing_path: Path, ex_only_dates: list,
+                           ex_dated: dict, dry_run: bool) -> int:
+    count = 0
+    for date in ex_only_dates:
+        for dirname in ex_dated[date]:
+            if dirname.startswith(f"Phish-{date}."):
+                continue
+            new_name = existing_to_torrent_name(dirname, date)
+            src = existing_path / dirname
+            dst = existing_path / new_name
+            if src == dst:
+                continue
+            if dry_run:
+                print(f"  [Phase 4 - DRY RUN] mv {dirname} → {new_name}")
+            else:
+                print(f"  [Phase 4] Renaming  {dirname} → {new_name}")
+                src.rename(dst)
+            count += 1
+    return count
+
+
+def phase_summary(new_count: int, replaced_count: int, renamed_count: int,
+                  existing_path: Path, dry_run: bool):
+    mode = "DRY RUN — would have" if dry_run else "Complete."
+    print(f"\n  {bold('SUMMARY')}  [{mode}]")
+    print(f"  {green(str(new_count))}  shows copied from torrent (new)")
+    print(f"  {green(str(replaced_count))}  shows replaced with torrent canonical copy")
+    print(f"  {yellow(str(renamed_count))}  existing-only shows renamed to torrent style")
+    if not dry_run:
+        print()
+        print(f"  {bold('Next step:')} trigger a Plex library scan for:")
+        print(f"    {existing_path}")
+        print()
+        print(f"  {bold('Important:')} do not run `music-sync phish` again.")
+        print(f"  tranquility is now the source of truth for the Phish collection.")
+    print()
+
+
+def main_logic(existing_path: Path, torrent_path: Path, nas_path, dry_run: bool):
+    ex_dated, _ex_undated = load(existing_path, date_from_existing)
+    tr_dated, _tr_undated = load(torrent_path,  date_from_torrent)
+
+    ex_dates      = set(ex_dated.keys())
+    tr_dates      = set(tr_dated.keys())
+    matched_dates = sorted(ex_dates & tr_dates)
+    ex_only_dates = sorted(ex_dates - tr_dates)
+    tr_only_dates = sorted(tr_dates - ex_dates)
+
+    print(f"  {len(ex_dates)} existing  ·  {len(tr_dates)} torrent  ·  "
+          f"{len(matched_dates)} matched  ·  {len(ex_only_dates)} existing-only  ·  "
+          f"{len(tr_only_dates)} torrent-only\n")
+
+    phase_backup(existing_path, nas_path, dry_run)
+    new_count      = phase_copy_new(torrent_path, existing_path, tr_only_dates, tr_dated, dry_run)
+    replaced_count = phase_replace_matched(torrent_path, existing_path, matched_dates, ex_dated, tr_dated, dry_run)
+    renamed_count  = phase_rename_existing(existing_path, ex_only_dates, ex_dated, dry_run)
+    phase_summary(new_count, replaced_count, renamed_count, existing_path, dry_run)
+
+
+def parse_args(argv):
+    existing_path = DEFAULT_EXISTING
+    torrent_path  = DEFAULT_TORRENT
+    nas_path      = None
+    dry_run       = True
+
+    args = argv[1:]
+    i = 0
+    while i < len(args):
+        if args[i] in ("-e", "--existing"):
+            if i + 1 >= len(args):
+                print(f"Missing value for {args[i]}", file=sys.stderr); sys.exit(1)
+            existing_path = Path(args[i + 1]); i += 2
+        elif args[i] in ("-t", "--torrent"):
+            if i + 1 >= len(args):
+                print(f"Missing value for {args[i]}", file=sys.stderr); sys.exit(1)
+            torrent_path = Path(args[i + 1]); i += 2
+        elif args[i] == "--nas":
+            if i + 1 >= len(args):
+                print(f"Missing value for {args[i]}", file=sys.stderr); sys.exit(1)
+            nas_path = Path(args[i + 1]); i += 2
+        elif args[i] == "--dry-run":
+            dry_run = True; i += 1
+        elif args[i] == "--execute":
+            dry_run = False; i += 1
+        elif args[i] in ("-h", "--help"):
+            print(__doc__)
+            sys.exit(0)
+        else:
+            print(f"Unknown argument: {args[i]}", file=sys.stderr)
+            sys.exit(1)
+
+    return existing_path, torrent_path, nas_path, dry_run
+
+
+def main():
+    existing_path, torrent_path, nas_path, dry_run = parse_args(sys.argv)
+    mode = "DRY RUN" if dry_run else "EXECUTE"
+    print(f"\n  {bold('PHISH MERGE')}  [{mode}]")
+    print(f"  {dim('Existing:')}  {existing_path}")
+    print(f"  {dim('Torrent: ')}  {torrent_path}")
+    if not dry_run:
+        print(f"  {dim('NAS:     ')}  {nas_path}")
+    print()
+    preflight(existing_path, torrent_path, nas_path, not dry_run)
+    main_logic(existing_path, torrent_path, nas_path, dry_run)
+
+
+if __name__ == "__main__":
+    main()
