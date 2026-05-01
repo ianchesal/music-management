@@ -9,11 +9,13 @@ Usage:
   phish-merge [--dry-run]
   phish-merge --execute --nas PATH
   phish-merge --existing PATH --torrent PATH --execute --nas PATH
+  phish-merge --phase N [--dry-run | --execute --nas PATH]
 
 Options:
   -e, --existing PATH   Existing live collection path
   -t, --torrent  PATH   Torrent directory path
       --nas      PATH   NAS backup destination (required with --execute)
+      --phase    N      Run only phase N (1=backup, 2=copy-new, 3=replace, 4=rename)
       --dry-run         Print planned actions, touch nothing [default]
       --execute         Perform the actual merge
   -h, --help            Show this message
@@ -224,7 +226,8 @@ def phase_summary(new_count: int, replaced_count: int, renamed_count: int,
     print()
 
 
-def main_logic(existing_path: Path, torrent_path: Path, nas_path, dry_run: bool):
+def main_logic(existing_path: Path, torrent_path: Path, nas_path, dry_run: bool,
+               phase: int = None):
     ex_dated, _ex_undated = load(existing_path, date_from_existing)
     tr_dated, _tr_undated = load(torrent_path,  date_from_torrent)
 
@@ -238,10 +241,21 @@ def main_logic(existing_path: Path, torrent_path: Path, nas_path, dry_run: bool)
           f"{len(matched_dates)} matched  ·  {len(ex_only_dates)} existing-only  ·  "
           f"{len(tr_only_dates)} torrent-only\n")
 
-    phase_backup(existing_path, nas_path, dry_run)
-    new_count      = phase_copy_new(torrent_path, existing_path, tr_only_dates, tr_dated, dry_run)
-    replaced_count = phase_replace_matched(torrent_path, existing_path, matched_dates, ex_dated, tr_dated, dry_run)
-    renamed_count  = phase_rename_existing(existing_path, ex_only_dates, ex_dated, dry_run)
+    if phase is None or phase == 1:
+        phase_backup(existing_path, nas_path, dry_run)
+
+    new_count = 0
+    if phase is None or phase == 2:
+        new_count = phase_copy_new(torrent_path, existing_path, tr_only_dates, tr_dated, dry_run)
+
+    replaced_count = 0
+    if phase is None or phase == 3:
+        replaced_count = phase_replace_matched(torrent_path, existing_path, matched_dates, ex_dated, tr_dated, dry_run)
+
+    renamed_count = 0
+    if phase is None or phase == 4:
+        renamed_count = phase_rename_existing(existing_path, ex_only_dates, ex_dated, dry_run)
+
     phase_summary(new_count, replaced_count, renamed_count, existing_path, dry_run)
 
 
@@ -294,16 +308,17 @@ def parse_args(argv):
 
 
 def main():
-    existing_path, torrent_path, nas_path, dry_run = parse_args(sys.argv)
+    existing_path, torrent_path, nas_path, dry_run, phase = parse_args(sys.argv)
     mode = "DRY RUN" if dry_run else "EXECUTE"
-    print(f"\n  {bold('PHISH MERGE')}  [{mode}]")
+    phase_label = f" · PHASE {phase}" if phase is not None else ""
+    print(f"\n  {bold('PHISH MERGE')}  [{mode}{phase_label}]")
     print(f"  {dim('Existing:')}  {existing_path}")
     print(f"  {dim('Torrent: ')}  {torrent_path}")
     if not dry_run:
         print(f"  {dim('NAS:     ')}  {nas_path}")
     print()
     preflight(existing_path, torrent_path, nas_path, not dry_run)
-    main_logic(existing_path, torrent_path, nas_path, dry_run)
+    main_logic(existing_path, torrent_path, nas_path, dry_run, phase)
 
 
 if __name__ == "__main__":
