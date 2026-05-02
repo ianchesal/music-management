@@ -4,9 +4,11 @@ After=local-fs.target
 
 [Service]
 Type=oneshot
+# Update ExecStart to the actual checkout path on the deployment machine
 ExecStart=/home/ian/src/ianchesal/music-management/bin/borg-backup
 Nice=19
 IOSchedulingClass=idle
+TimeoutStartSec=0
 ProtectSystem=strict
 ReadOnlyPaths=/data/media/Sorted/Unsorted/Music
 ReadWritePaths=/data/media-nas/Backups/borg
