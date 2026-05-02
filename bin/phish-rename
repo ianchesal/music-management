@@ -1,0 +1,237 @@
+#!/usr/bin/env python3
+"""
+phish-rename — Rename new Phish live show downloads to canonical LivePhish format.
+
+Scans PATH for directories matching YYYY-MM-DD or YYYY_MM_DD naming patterns,
+looks up each show on livephish.com, and renames to:
+  Phish-YYYY-MM-DD.Dot.Separated.Location.[LivePhishID]
+
+Usage:
+  phish-rename PATH
+  phish-rename PATH --dry-run
+  phish-rename PATH --execute
+
+Options:
+  PATH          Directory containing show subdirectories (required)
+  --dry-run     Print planned renames, touch nothing [default]
+  --execute     Perform the actual renames
+  -h, --help    Show this message
+"""
+
+import os
+import re
+import sys
+import time
+from pathlib import Path
+
+import requests
+from bs4 import BeautifulSoup
+
+# ── Terminal ───────────────────────────────────────────────────────────────────
+
+try:
+    COLS = min(os.get_terminal_size().columns, 160)
+except OSError:
+    COLS = 120
+
+USE_COLOR = sys.stdout.isatty()
+
+
+def _ansi(code, s):
+    return f"\033[{code}m{s}\033[0m" if USE_COLOR else s
+
+
+def bold(s):   return _ansi("1",  s)
+def dim(s):    return _ansi("2",  s)
+def yellow(s): return _ansi("93", s)
+def green(s):  return _ansi("92", s)
+
+
+# ── Constants ──────────────────────────────────────────────────────────────────
+
+SEARCH_URL = (
+    "https://www.livephish.com/on/demandware.store/"
+    "Sites-LivePhish-Site/default/Search-Show"
+    "?search-button=&q={date}&lang=default"
+)
+
+HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    )
+}
+
+# ── Core functions ─────────────────────────────────────────────────────────────
+
+def date_from_dirname(dirname: str):
+    m = re.match(r'^(\d{4})[-_](\d{1,2})[-_](\d{1,2})\b', dirname)
+    if m:
+        y, mo, d = m.group(1), int(m.group(2)), int(m.group(3))
+        return f"{y}-{mo:02d}-{d:02d}"
+    return None
+
+
+def is_conforming(dirname: str) -> bool:
+    return bool(re.match(r'^Phish-\d{4}-\d{2}-\d{2}\..+\.\[\d+\]$', dirname))
+
+
+def location_to_dots(location_str: str) -> str:
+    name = location_str.strip()
+    name = name.replace(",", "")
+    name = re.sub(r"\s+", ".", name.strip())
+    return name.strip(".")
+
+
+def to_canonical_name(date: str, location: str, release_id: str) -> str:
+    return f"Phish-{date}.{location}.[{release_id}]"
+
+
+def parse_search_results(html: str) -> list:
+    soup = BeautifulSoup(html, "html.parser")
+    candidates = []
+    seen_ids = set()
+
+    for a in soup.find_all("a", href=re.compile(r"^/LP-(\d+)\.html$")):
+        img = a.find("img")
+        if img is None:
+            continue
+        alt = img.get("alt", "").strip()
+        if "4k" in alt.lower():
+            continue
+        release_id = re.search(r"/LP-(\d+)\.html", a["href"]).group(1)
+        if release_id in seen_ids:
+            continue
+        seen_ids.add(release_id)
+        location_raw = re.sub(r"^\d{1,2}/\d{1,2}/\d{2,4}\s*", "", alt).strip()
+        candidates.append((release_id, location_raw))
+
+    return candidates
+
+
+def search_livephish(date: str) -> str:
+    url = SEARCH_URL.format(date=date)
+    resp = requests.get(url, headers=HEADERS, timeout=10)
+    resp.raise_for_status()
+    return resp.text
+
+
+def pick_best_match(candidates: list):
+    return candidates[0] if candidates else None
+
+
+# ── Main logic ─────────────────────────────────────────────────────────────────
+
+def main_logic(path: Path, dry_run: bool):
+    renamed = 0
+    skipped_conforming = 0
+    skipped_not_found = 0
+    skipped_collision = 0
+    skipped_unrecognized = 0
+
+    entries = sorted(path.iterdir(), key=lambda e: e.name.lower())
+    for entry in entries:
+        if not entry.is_dir() or entry.name.startswith('.'):
+            continue
+
+        if is_conforming(entry.name):
+            skipped_conforming += 1
+            continue
+
+        date = date_from_dirname(entry.name)
+        if date is None:
+            skipped_unrecognized += 1
+            continue
+
+        try:
+            html = search_livephish(date)
+            time.sleep(0.5)
+        except Exception as e:
+            print(f"  {yellow('WARN')} {entry.name}: HTTP error — {e}", file=sys.stderr)
+            skipped_not_found += 1
+            continue
+
+        candidates = parse_search_results(html)
+        match = pick_best_match(candidates)
+
+        if match is None:
+            print(f"  {yellow('WARN')} {entry.name}: not found on livephish.com", file=sys.stderr)
+            skipped_not_found += 1
+            continue
+
+        release_id, location_raw = match
+        location = location_to_dots(location_raw)
+        new_name = to_canonical_name(date, location, release_id)
+
+        src = path / entry.name
+        dst = path / new_name
+
+        if dst.exists():
+            print(f"  {yellow('WARN')} skipping {entry.name}: destination already exists ({new_name})", file=sys.stderr)
+            skipped_collision += 1
+            continue
+
+        if dry_run:
+            print(f"  [DRY RUN] mv {entry.name} → {new_name}")
+        else:
+            print(f"  Renaming  {entry.name} → {new_name}")
+            src.rename(dst)
+        renamed += 1
+
+    print()
+    print(f"  {bold('SUMMARY')}")
+    print(f"  {green(str(renamed))}  renamed")
+    print(f"  {dim(str(skipped_conforming))}  skipped (already conforming)")
+    print(f"  {yellow(str(skipped_not_found))}  skipped (not found on livephish.com)")
+    print(f"  {yellow(str(skipped_collision))}  skipped (destination already exists)")
+    print(f"  {dim(str(skipped_unrecognized))}  skipped (unrecognized format)")
+    print()
+
+
+# ── Argument parsing ───────────────────────────────────────────────────────────
+
+def parse_args(argv):
+    path = None
+    dry_run = True
+
+    args = argv[1:]
+    i = 0
+    while i < len(args):
+        if args[i] in ("-h", "--help"):
+            print(__doc__)
+            sys.exit(0)
+        elif args[i] == "--dry-run":
+            dry_run = True
+            i += 1
+        elif args[i] == "--execute":
+            dry_run = False
+            i += 1
+        elif not args[i].startswith("-"):
+            path = Path(args[i])
+            i += 1
+        else:
+            print(f"Unknown argument: {args[i]}", file=sys.stderr)
+            sys.exit(1)
+
+    if path is None:
+        print("Error: PATH is required", file=sys.stderr)
+        sys.exit(1)
+
+    if not path.exists():
+        print(f"Error: PATH does not exist: {path}", file=sys.stderr)
+        sys.exit(1)
+
+    return path, dry_run
+
+
+def main():
+    path, dry_run = parse_args(sys.argv)
+    mode = "DRY RUN" if dry_run else "EXECUTE"
+    print(f"\n  {bold('PHISH RENAME')}  [{mode}]")
+    print(f"  {dim('Path:')}  {path}")
+    print()
+    main_logic(path, dry_run)
+
+
+if __name__ == "__main__":
+    main()
