@@ -186,3 +186,52 @@ def main_logic(path: Path, dry_run: bool):
     print(f"  {yellow(str(skipped_collision))}  skipped (destination already exists)")
     print(f"  {dim(str(skipped_unrecognized))}  skipped (unrecognized format)")
     print()
+
+
+# ── Argument parsing ───────────────────────────────────────────────────────────
+
+def parse_args(argv):
+    path = None
+    dry_run = True
+
+    args = argv[1:]
+    i = 0
+    while i < len(args):
+        if args[i] in ("-h", "--help"):
+            print(__doc__)
+            sys.exit(0)
+        elif args[i] == "--dry-run":
+            dry_run = True
+            i += 1
+        elif args[i] == "--execute":
+            dry_run = False
+            i += 1
+        elif not args[i].startswith("-"):
+            path = Path(args[i])
+            i += 1
+        else:
+            print(f"Unknown argument: {args[i]}", file=sys.stderr)
+            sys.exit(1)
+
+    if path is None:
+        print("Error: PATH is required", file=sys.stderr)
+        sys.exit(1)
+
+    if not path.exists():
+        print(f"Error: PATH does not exist: {path}", file=sys.stderr)
+        sys.exit(1)
+
+    return path, dry_run
+
+
+def main():
+    path, dry_run = parse_args(sys.argv)
+    mode = "DRY RUN" if dry_run else "EXECUTE"
+    print(f"\n  {bold('PHISH RENAME')}  [{mode}]")
+    print(f"  {dim('Path:')}  {path}")
+    print()
+    main_logic(path, dry_run)
+
+
+if __name__ == "__main__":
+    main()

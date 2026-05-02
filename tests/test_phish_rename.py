@@ -119,6 +119,8 @@ class TestParseSearchResults:
 
 
 class TestSearchLivephish:
+    # patches the shared requests module; works because phish-rename uses
+    # "import requests", not "from requests import get"
     def test_calls_correct_url(self):
         mock_resp = MagicMock()
         mock_resp.text = FIXTURE_HTML_ONE_RESULT
@@ -224,3 +226,34 @@ class TestMainLogic:
             captured = capsys.readouterr()
             assert "already exists" in captured.err
             assert (Path(tmp) / "2024-07-20 Xfinity Center Mansfield MA").exists()
+
+
+class TestParseArgs:
+    def test_path_and_dry_run_default(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path, dry_run = pr.parse_args(["phish-rename", tmp])
+        assert str(path) == tmp
+        assert dry_run is True
+
+    def test_explicit_dry_run(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            _, dry_run = pr.parse_args(["phish-rename", tmp, "--dry-run"])
+        assert dry_run is True
+
+    def test_execute_flag(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            _, dry_run = pr.parse_args(["phish-rename", tmp, "--execute"])
+        assert dry_run is False
+
+    def test_missing_path_exits(self):
+        with pytest.raises(SystemExit):
+            pr.parse_args(["phish-rename"])
+
+    def test_nonexistent_path_exits(self):
+        with pytest.raises(SystemExit):
+            pr.parse_args(["phish-rename", "/nonexistent/path/xyz"])
+
+    def test_unknown_arg_exits(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with pytest.raises(SystemExit):
+                pr.parse_args(["phish-rename", tmp, "--unknown"])
