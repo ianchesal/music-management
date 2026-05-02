@@ -74,3 +74,14 @@ def date_from_dirname(dirname: str):
 
 def is_conforming(dirname: str) -> bool:
     return bool(re.match(r'^Phish-\d{4}-\d{2}-\d{2}\..+\.\[\d+\]$', dirname))
+
+
+def location_to_dots(location_str: str) -> str:
+    name = location_str.strip()
+    name = name.replace(",", "")
+    name = re.sub(r"\s+", ".", name.strip())
+    return name.strip(".")
+
+
+def to_canonical_name(date: str, location: str, release_id: str) -> str:
+    return f"Phish-{date}.{location}.[{release_id}]"

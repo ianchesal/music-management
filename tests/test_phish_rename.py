@@ -51,3 +51,27 @@ class TestIsConforming:
 
     def test_underscore_format_is_not_conforming(self):
         assert pr.is_conforming("2024_07_20 Xfinity Center Mansfield MA") is False
+
+
+class TestLocationToDots:
+    def test_venue_city_state(self):
+        assert pr.location_to_dots("Xfinity Center, Mansfield, MA") == "Xfinity.Center.Mansfield.MA"
+
+    def test_multi_word_venue(self):
+        assert pr.location_to_dots("Madison Square Garden, New York, NY") == "Madison.Square.Garden.New.York.NY"
+
+    def test_trailing_space_stripped(self):
+        assert pr.location_to_dots("Red Rocks Amphitheatre, Morrison, CO ") == "Red.Rocks.Amphitheatre.Morrison.CO"
+
+    def test_times_union_center(self):
+        assert pr.location_to_dots("Times Union Center, Albany, NY") == "Times.Union.Center.Albany.NY"
+
+
+class TestToCanonicalName:
+    def test_assembles_correctly(self):
+        assert pr.to_canonical_name("2024-07-20", "Xfinity.Center.Mansfield.MA", "2259") == \
+            "Phish-2024-07-20.Xfinity.Center.Mansfield.MA.[2259]"
+
+    def test_albany_show(self):
+        assert pr.to_canonical_name("2009-11-27", "Times.Union.Center.Albany.NY", "515") == \
+            "Phish-2009-11-27.Times.Union.Center.Albany.NY.[515]"
