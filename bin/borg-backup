@@ -14,8 +14,17 @@ fi
 source "$CONFIG_FILE"
 
 # Allow environment variable overrides (used by smoke test)
-BORG_SOURCE="${BORG_BACKUP_SOURCE:-$BORG_SOURCE}"
-BORG_REPO="${BORG_BACKUP_REPO:-$BORG_REPO}"
+BORG_SOURCE="${BORG_BACKUP_SOURCE:-${BORG_SOURCE:-}}"
+BORG_REPO="${BORG_BACKUP_REPO:-${BORG_REPO:-}}"
+
+if [[ -z "$BORG_SOURCE" ]]; then
+    echo "Error: BORG_SOURCE is not set in $CONFIG_FILE and BORG_BACKUP_SOURCE is not set in the environment" >&2
+    exit 1
+fi
+if [[ -z "$BORG_REPO" ]]; then
+    echo "Error: BORG_REPO is not set in $CONFIG_FILE and BORG_BACKUP_REPO is not set in the environment" >&2
+    exit 1
+fi
 
 # Validate prerequisites
 if [[ ! -x "$BORG" ]]; then
@@ -56,6 +65,7 @@ echo "=== Pruning old archives ==="
 "$BORG" prune \
     --list \
     --show-rc \
+    --glob-archives "${HOSTNAME}-*" \
     --keep-daily=30 \
     --keep-weekly=4 \
     --keep-monthly=12 \
