@@ -18,6 +18,26 @@ def load_module():
 
 pr = load_module()
 
+FIXTURE_HTML_TWO_RESULTS = """
+<html><body>
+<a href="/LP-2259.html"><img alt="07/20/24 Xfinity Center, Mansfield, MA " title="..."></a>
+<a href="/LP-2259.html">Phish</a>
+<a href="/LP-2351.html"><img alt="07/20/24 Xfinity Center 4k, Mansfield 4k, MA " title="..."></a>
+<a href="/LP-2351.html">Phish</a>
+</body></html>
+"""
+
+FIXTURE_HTML_ONE_RESULT = """
+<html><body>
+<a href="/LP-515.html"><img alt="11/27/09 Times Union Center, Albany, NY " title="..."></a>
+<a href="/LP-515.html">Phish</a>
+</body></html>
+"""
+
+FIXTURE_HTML_NO_RESULTS = """
+<html><body><p>No results found for your search.</p></body></html>
+"""
+
 
 class TestDateFromDirname:
     def test_yyyy_dash_mm_dd(self):
@@ -75,3 +95,29 @@ class TestToCanonicalName:
     def test_albany_show(self):
         assert pr.to_canonical_name("2009-11-27", "Times.Union.Center.Albany.NY", "515") == \
             "Phish-2009-11-27.Times.Union.Center.Albany.NY.[515]"
+
+
+class TestParseSearchResults:
+    def test_returns_non_4k_result(self):
+        results = pr.parse_search_results(FIXTURE_HTML_TWO_RESULTS)
+        assert len(results) == 1
+        assert results[0] == ("2259", "Xfinity Center, Mansfield, MA")
+
+    def test_filters_4k_results(self):
+        results = pr.parse_search_results(FIXTURE_HTML_TWO_RESULTS)
+        ids = [r[0] for r in results]
+        assert "2351" not in ids
+
+    def test_single_result(self):
+        results = pr.parse_search_results(FIXTURE_HTML_ONE_RESULT)
+        assert len(results) == 1
+        assert results[0] == ("515", "Times Union Center, Albany, NY")
+
+    def test_no_results_returns_empty(self):
+        results = pr.parse_search_results(FIXTURE_HTML_NO_RESULTS)
+        assert results == []
+
+    def test_location_strips_date_prefix(self):
+        results = pr.parse_search_results(FIXTURE_HTML_ONE_RESULT)
+        _, location = results[0]
+        assert not location.startswith("11/")

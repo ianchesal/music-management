@@ -85,3 +85,28 @@ def location_to_dots(location_str: str) -> str:
 
 def to_canonical_name(date: str, location: str, release_id: str) -> str:
     return f"Phish-{date}.{location}.[{release_id}]"
+
+
+def parse_search_results(html: str) -> list:
+    soup = BeautifulSoup(html, "html.parser")
+    candidates = []
+    seen_ids = set()
+
+    for a in soup.find_all("a", href=re.compile(r"^/LP-(\d+)\.html$")):
+        img = a.find("img")
+        if img is None:
+            continue
+        alt = img.get("alt", "").strip()
+        if "4k" in alt.lower():
+            continue
+        m = re.search(r"/LP-(\d+)\.html", a["href"])
+        if not m:
+            continue
+        release_id = m.group(1)
+        if release_id in seen_ids:
+            continue
+        seen_ids.add(release_id)
+        location_raw = re.sub(r"^\d{1,2}/\d{1,2}/\d{2,4}\s*", "", alt).strip()
+        candidates.append((release_id, location_raw))
+
+    return candidates
