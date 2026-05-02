@@ -136,6 +136,7 @@ Nightly incremental backup of the music library using [Borg](https://www.borgbac
 
 **One-time deployment:**
 ```bash
+# Edit ExecStart in systemd/borg-music-backup.service to match your checkout path
 sudo cp systemd/borg-music-backup.{service,timer} /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now borg-music-backup.timer
@@ -143,11 +144,11 @@ sudo systemctl enable --now borg-music-backup.timer
 
 **Day-to-day operations:**
 ```bash
-journalctl -u borg-music-backup.service    # full log of last run
-systemctl status borg-music-backup.timer   # next scheduled run
-systemctl list-timers borg-music-backup    # countdown to next run
-borg list /data/media-nas/Backups/borg     # list all archives
-borg info /data/media-nas/Backups/borg     # repo stats and disk usage
+journalctl -u borg-music-backup.service -n 200    # tail output from last run
+systemctl status borg-music-backup.timer          # timer active state
+systemctl list-timers borg-music-backup           # countdown to next run
+borg list /data/media-nas/Backups/borg            # list all archives
+borg info /data/media-nas/Backups/borg            # repo stats and disk usage
 ```
 
 **Manual smoke test (uses temp directories, safe to run anytime):**
