@@ -213,3 +213,14 @@ class TestMainLogic:
                 with patch("time.sleep"):
                     pr.main_logic(Path(tmp), dry_run=False)
             assert (Path(tmp) / "Phish-2024-07-20.Xfinity.Center.Mansfield.MA.[2259]").exists()
+
+    def test_skips_when_destination_exists(self, capsys):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._make_dir(tmp, "2024-07-20 Xfinity Center Mansfield MA")
+            self._make_dir(tmp, "Phish-2024-07-20.Xfinity.Center.Mansfield.MA.[2259]")
+            with patch.object(pr, "search_livephish", return_value=FIXTURE_HTML_TWO_RESULTS):
+                with patch("time.sleep"):
+                    pr.main_logic(Path(tmp), dry_run=False)
+            captured = capsys.readouterr()
+            assert "already exists" in captured.err
+            assert (Path(tmp) / "2024-07-20 Xfinity Center Mansfield MA").exists()

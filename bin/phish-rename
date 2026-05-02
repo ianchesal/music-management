@@ -126,6 +126,7 @@ def main_logic(path: Path, dry_run: bool):
     renamed = 0
     skipped_conforming = 0
     skipped_not_found = 0
+    skipped_collision = 0
     skipped_unrecognized = 0
 
     entries = sorted(path.iterdir(), key=lambda e: e.name.lower())
@@ -167,7 +168,7 @@ def main_logic(path: Path, dry_run: bool):
 
         if dst.exists():
             print(f"  {yellow('WARN')} skipping {entry.name}: destination already exists ({new_name})", file=sys.stderr)
-            skipped_not_found += 1
+            skipped_collision += 1
             continue
 
         if dry_run:
@@ -182,5 +183,6 @@ def main_logic(path: Path, dry_run: bool):
     print(f"  {green(str(renamed))}  renamed")
     print(f"  {dim(str(skipped_conforming))}  skipped (already conforming)")
     print(f"  {yellow(str(skipped_not_found))}  skipped (not found on livephish.com)")
+    print(f"  {yellow(str(skipped_collision))}  skipped (destination already exists)")
     print(f"  {dim(str(skipped_unrecognized))}  skipped (unrecognized format)")
     print()
