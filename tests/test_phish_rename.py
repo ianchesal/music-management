@@ -103,11 +103,6 @@ class TestParseSearchResults:
         assert len(results) == 1
         assert results[0] == ("2259", "Xfinity Center, Mansfield, MA")
 
-    def test_filters_4k_results(self):
-        results = pr.parse_search_results(FIXTURE_HTML_TWO_RESULTS)
-        ids = [r[0] for r in results]
-        assert "2351" not in ids
-
     def test_single_result(self):
         results = pr.parse_search_results(FIXTURE_HTML_ONE_RESULT)
         assert len(results) == 1

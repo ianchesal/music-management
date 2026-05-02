@@ -99,10 +99,7 @@ def parse_search_results(html: str) -> list:
         alt = img.get("alt", "").strip()
         if "4k" in alt.lower():
             continue
-        m = re.search(r"/LP-(\d+)\.html", a["href"])
-        if not m:
-            continue
-        release_id = m.group(1)
+        release_id = re.search(r"/LP-(\d+)\.html", a["href"]).group(1)
         if release_id in seen_ids:
             continue
         seen_ids.add(release_id)
