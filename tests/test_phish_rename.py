@@ -116,3 +116,31 @@ class TestParseSearchResults:
         results = pr.parse_search_results(FIXTURE_HTML_ONE_RESULT)
         _, location = results[0]
         assert not location.startswith("11/")
+
+
+class TestSearchLivephish:
+    def test_calls_correct_url(self):
+        mock_resp = MagicMock()
+        mock_resp.text = FIXTURE_HTML_ONE_RESULT
+        mock_resp.raise_for_status = MagicMock()
+        with patch("requests.get", return_value=mock_resp) as mock_get:
+            result = pr.search_livephish("2009-11-27")
+        url = mock_get.call_args[0][0]
+        assert "q=2009-11-27" in url
+        assert result == FIXTURE_HTML_ONE_RESULT
+
+    def test_raises_on_http_error(self):
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status.side_effect = Exception("404")
+        with patch("requests.get", return_value=mock_resp):
+            with pytest.raises(Exception, match="404"):
+                pr.search_livephish("2024-01-01")
+
+
+class TestPickBestMatch:
+    def test_returns_first_candidate(self):
+        candidates = [("2259", "Xfinity Center, Mansfield, MA"), ("9999", "Other Venue")]
+        assert pr.pick_best_match(candidates) == ("2259", "Xfinity Center, Mansfield, MA")
+
+    def test_returns_none_for_empty(self):
+        assert pr.pick_best_match([]) is None
