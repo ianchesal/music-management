@@ -143,13 +143,16 @@ Required external tools:
 - `bats` — For running bats tests locally
 - `pyenv` — For managing Python version
 - `pytest` — For running Python tests locally
+- `borg` 1.2+ — Incremental backup for music library (`sudo apt-get install borgbackup`)
 
 ## File Structure
 
-- `bin/` — Phish collection Python tools
+- `bin/` — Phish collection Python tools and Borg backup scripts
   - `phish-rename` — Rename downloads to canonical LivePhish format
   - `phish-compare` — Compare existing collection vs torrent (read-only)
   - `phish-merge` — Merge torrent into existing collection
+  - `borg-backup` — Incremental Borg backup: init, create, prune, compact
+  - `borg-backup-test` — Smoke test helper using temp directories (safe to run anytime)
 - `sync/` — Music synchronization scripts and configurations
   - `config/` — Configuration files (global environment settings and per-artist configs)
   - `lib/` — Shared library functions (sync-lib.sh)
