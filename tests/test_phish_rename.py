@@ -144,3 +144,63 @@ class TestPickBestMatch:
 
     def test_returns_none_for_empty(self):
         assert pr.pick_best_match([]) is None
+
+
+class TestMainLogic:
+    def _make_dir(self, parent, name):
+        d = Path(parent) / name
+        d.mkdir()
+        return d
+
+    def test_dry_run_prints_rename_no_filesystem_change(self, capsys):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._make_dir(tmp, "2024-07-20 Xfinity Center Mansfield MA")
+            with patch.object(pr, "search_livephish", return_value=FIXTURE_HTML_TWO_RESULTS):
+                with patch("time.sleep"):
+                    pr.main_logic(Path(tmp), dry_run=True)
+            captured = capsys.readouterr()
+            assert "DRY RUN" in captured.out
+            assert "Phish-2024-07-20.Xfinity.Center.Mansfield.MA.[2259]" in captured.out
+            assert (Path(tmp) / "2024-07-20 Xfinity Center Mansfield MA").exists()
+
+    def test_execute_renames_directory(self, capsys):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._make_dir(tmp, "2024-07-20 Xfinity Center Mansfield MA")
+            with patch.object(pr, "search_livephish", return_value=FIXTURE_HTML_TWO_RESULTS):
+                with patch("time.sleep"):
+                    pr.main_logic(Path(tmp), dry_run=False)
+            assert not (Path(tmp) / "2024-07-20 Xfinity Center Mansfield MA").exists()
+            assert (Path(tmp) / "Phish-2024-07-20.Xfinity.Center.Mansfield.MA.[2259]").exists()
+
+    def test_skips_conforming_silently(self, capsys):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._make_dir(tmp, "Phish-2024-07-20.Xfinity.Center.Mansfield.MA.[2259]")
+            with patch.object(pr, "search_livephish") as mock_search:
+                pr.main_logic(Path(tmp), dry_run=True)
+            mock_search.assert_not_called()
+            captured = capsys.readouterr()
+            assert "DRY RUN" not in captured.out
+
+    def test_warns_when_not_found(self, capsys):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._make_dir(tmp, "2024-07-20 Xfinity Center Mansfield MA")
+            with patch.object(pr, "search_livephish", return_value=FIXTURE_HTML_NO_RESULTS):
+                with patch("time.sleep"):
+                    pr.main_logic(Path(tmp), dry_run=True)
+            captured = capsys.readouterr()
+            assert "not found" in captured.out
+
+    def test_skips_unrecognized_silently(self, capsys):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._make_dir(tmp, "Live Bait Vol 10")
+            with patch.object(pr, "search_livephish") as mock_search:
+                pr.main_logic(Path(tmp), dry_run=True)
+            mock_search.assert_not_called()
+
+    def test_underscore_date_format(self, capsys):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._make_dir(tmp, "2024_07_20 Xfinity Center Mansfield MA")
+            with patch.object(pr, "search_livephish", return_value=FIXTURE_HTML_TWO_RESULTS):
+                with patch("time.sleep"):
+                    pr.main_logic(Path(tmp), dry_run=False)
+            assert (Path(tmp) / "Phish-2024-07-20.Xfinity.Center.Mansfield.MA.[2259]").exists()
