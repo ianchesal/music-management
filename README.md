@@ -124,6 +124,42 @@ Modern, unified approach to synchronizing music collections:
 ./sync/music-sync -y trey-anastasio
 ```
 
+### Borg Backup (`bin/borg-backup`)
+
+Nightly incremental backup of the music library using [Borg](https://www.borgbackup.org/):
+
+- **Source:** `/data/media/Sorted/Unsorted/Music` (configured in `sync/config/global.conf`)
+- **Destination:** `/data/media-nas/Backups/borg` (configured in `sync/config/global.conf`)
+- **Retention:** 30 daily + 4 weekly + 12 monthly archives
+- **Compression:** lz4 (fast, near-zero CPU overhead)
+- **Encryption:** none (NAS is a trusted local destination)
+
+**One-time deployment:**
+```bash
+sudo cp systemd/borg-music-backup.{service,timer} /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now borg-music-backup.timer
+```
+
+**Day-to-day operations:**
+```bash
+journalctl -u borg-music-backup.service    # full log of last run
+systemctl status borg-music-backup.timer   # next scheduled run
+systemctl list-timers borg-music-backup    # countdown to next run
+borg list /data/media-nas/Backups/borg     # list all archives
+borg info /data/media-nas/Backups/borg     # repo stats and disk usage
+```
+
+**Manual smoke test (uses temp directories, safe to run anytime):**
+```bash
+bin/borg-backup-test
+```
+
+**If the last run left a stale lock:**
+```bash
+borg break-lock /data/media-nas/Backups/borg
+```
+
 ### Audio Functions (`zsh/functions/`)
 
 Shell functions for audio processing:
@@ -303,6 +339,10 @@ tests/                        # Test suite
 zsh/functions/               # Audio processing utilities
 ├── flac2alac
 └── flacinfo
+
+systemd/
+├── borg-music-backup.service   # Systemd service unit
+└── borg-music-backup.timer     # Systemd timer unit (nightly at 2am)
 ```
 
 ## Dependencies
@@ -316,6 +356,7 @@ zsh/functions/               # Audio processing utilities
 - **python3** with `requests` and `beautifulsoup4` (for bin/ tools — see `requirements.txt`)
 - **bats** (for running bats tests locally)
 - **pytest** (for running Python tests locally)
+- **borg** 1.2+ (for music library backup — `sudo apt-get install borgbackup`)
 
 ## Contributing
 
