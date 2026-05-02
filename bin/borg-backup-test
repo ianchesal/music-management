@@ -26,6 +26,11 @@ echo "Source:  $FAKE_SOURCE"
 echo "Repo:    ${FAKE_REPO_PARENT}/borg"
 echo ""
 
+if [[ ! -x "${SCRIPT_DIR}/borg-backup" ]]; then
+    echo "Error: ${SCRIPT_DIR}/borg-backup not found — run Task 3 first" >&2
+    exit 1
+fi
+
 BORG_BACKUP_SOURCE="$FAKE_SOURCE" \
 BORG_BACKUP_REPO="${FAKE_REPO_PARENT}/borg" \
     "${SCRIPT_DIR}/borg-backup"
