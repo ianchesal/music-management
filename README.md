@@ -255,6 +255,8 @@ PARTIAL_DIR="/path/for/partial/transfers"
 RSYNC_BASE_OPTS="--archive --compress --verbose --human-readable --delete --progress --partial"
 DEFAULT_CONFIRM_PROMPTS=true
 DEFAULT_ENABLE_NAS_BACKUP=false
+BORG_SOURCE="/path/to/music/library"
+BORG_REPO="/path/to/borg/repository"
 ```
 
 ### Artist Configuration (`sync/config/<artist>.conf`)
