@@ -154,7 +154,7 @@ def main_logic(path: Path, dry_run: bool):
         match = pick_best_match(candidates)
 
         if match is None:
-            print(f"  {yellow('WARN')} {entry.name}: not found on livephish.com")
+            print(f"  {yellow('WARN')} {entry.name}: not found on livephish.com", file=sys.stderr)
             skipped_not_found += 1
             continue
 
@@ -164,6 +164,11 @@ def main_logic(path: Path, dry_run: bool):
 
         src = path / entry.name
         dst = path / new_name
+
+        if dst.exists():
+            print(f"  {yellow('WARN')} skipping {entry.name}: destination already exists ({new_name})", file=sys.stderr)
+            skipped_not_found += 1
+            continue
 
         if dry_run:
             print(f"  [DRY RUN] mv {entry.name} → {new_name}")

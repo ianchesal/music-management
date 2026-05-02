@@ -188,7 +188,16 @@ class TestMainLogic:
                 with patch("time.sleep"):
                     pr.main_logic(Path(tmp), dry_run=True)
             captured = capsys.readouterr()
-            assert "not found" in captured.out
+            assert "not found" in captured.err
+
+    def test_http_error_warns_and_counts_as_not_found(self, capsys):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._make_dir(tmp, "2024-07-20 Xfinity Center Mansfield MA")
+            with patch.object(pr, "search_livephish", side_effect=Exception("503")):
+                pr.main_logic(Path(tmp), dry_run=True)
+            captured = capsys.readouterr()
+            assert "HTTP error" in captured.err
+            assert "skipped (not found" in captured.out
 
     def test_skips_unrecognized_silently(self, capsys):
         with tempfile.TemporaryDirectory() as tmp:
