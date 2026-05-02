@@ -124,11 +124,11 @@ def phase_backup(existing_path: Path, nas_path, dry_run: bool):
         if nas_path is None:
             print("  [Phase 1 - DRY RUN] Would rsync existing → <nas-path> (provide --nas with --execute)")
         else:
-            cmd = ["rsync", "--archive", "--verbose", "--progress", "--human-readable",
+            cmd = ["rsync", "--archive", "--no-group", "--verbose", "--progress", "--human-readable",
                    f"{existing_path}/", str(nas_path)]
             print(f"  [Phase 1 - DRY RUN] Would run: {' '.join(cmd)}")
         return
-    cmd = ["rsync", "--archive", "--verbose", "--progress", "--human-readable",
+    cmd = ["rsync", "--archive", "--no-group", "--verbose", "--progress", "--human-readable",
            f"{existing_path}/", str(nas_path)]
     print(f"  [Phase 1] Backing up {existing_path} → {nas_path} ...")
     result = subprocess.run(cmd)
