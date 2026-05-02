@@ -119,6 +119,7 @@ Required external tools:
 - `ssh` — Remote server access for verification
 - `python3` with `requests` and `beautifulsoup4` — Required by `bin/` tools (`pip install -r requirements.txt`)
 - `bats` — For running bats tests locally
+- `pyenv` — For managing Python version
 - `pytest` — For running Python tests locally
 
 ## File Structure

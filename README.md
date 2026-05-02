@@ -14,6 +14,9 @@ A collection of command-line tools for managing music collections, specifically 
 
 ## Quick Start
 
+Note: `pyenv` is the best way to work with Python code in this project. It is assumed to be
+in use throughout this README when referencing Python commands.
+
 ### 1. Clone and Setup
 ```bash
 git clone https://github.com/ianchesal/music-management.git
