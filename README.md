@@ -124,6 +124,43 @@ Modern, unified approach to synchronizing music collections:
 ./sync/music-sync -y trey-anastasio
 ```
 
+### Borg Backup (`bin/borg-backup`)
+
+Nightly incremental backup of the music library using [Borg](https://www.borgbackup.org/):
+
+- **Source:** `/data/media/Sorted/Unsorted/Music` (configured in `sync/config/global.conf`)
+- **Destination:** `/data/media-nas/Backups/borg` (configured in `sync/config/global.conf`)
+- **Retention:** 30 daily + 4 weekly + 12 monthly archives
+- **Compression:** lz4 (fast, near-zero CPU overhead)
+- **Encryption:** none (NAS is a trusted local destination)
+
+**One-time deployment:**
+```bash
+# Edit ExecStart in systemd/borg-music-backup.service to match your checkout path
+sudo cp systemd/borg-music-backup.{service,timer} /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now borg-music-backup.timer
+```
+
+**Day-to-day operations:**
+```bash
+journalctl -u borg-music-backup.service -n 200    # tail output from last run
+systemctl status borg-music-backup.timer          # timer active state
+systemctl list-timers borg-music-backup           # countdown to next run
+borg list /data/media-nas/Backups/borg            # list all archives
+borg info /data/media-nas/Backups/borg            # repo stats and disk usage
+```
+
+**Manual smoke test (uses temp directories, safe to run anytime):**
+```bash
+bin/borg-backup-test
+```
+
+**If the last run left a stale lock:**
+```bash
+borg break-lock /data/media-nas/Backups/borg
+```
+
 ### Audio Functions (`zsh/functions/`)
 
 Shell functions for audio processing:
@@ -218,6 +255,8 @@ PARTIAL_DIR="/path/for/partial/transfers"
 RSYNC_BASE_OPTS="--archive --compress --verbose --human-readable --delete --progress --partial"
 DEFAULT_CONFIRM_PROMPTS=true
 DEFAULT_ENABLE_NAS_BACKUP=false
+BORG_SOURCE="/path/to/music/library"
+BORG_REPO="/path/to/borg/repository"
 ```
 
 ### Artist Configuration (`sync/config/<artist>.conf`)
@@ -303,6 +342,10 @@ tests/                        # Test suite
 zsh/functions/               # Audio processing utilities
 ├── flac2alac
 └── flacinfo
+
+systemd/
+├── borg-music-backup.service   # Systemd service unit
+└── borg-music-backup.timer     # Systemd timer unit (nightly at 2am)
 ```
 
 ## Dependencies
@@ -316,6 +359,7 @@ zsh/functions/               # Audio processing utilities
 - **python3** with `requests` and `beautifulsoup4` (for bin/ tools — see `requirements.txt`)
 - **bats** (for running bats tests locally)
 - **pytest** (for running Python tests locally)
+- **borg** 1.2+ (for music library backup — `sudo apt-get install borgbackup`)
 
 ## Contributing
 

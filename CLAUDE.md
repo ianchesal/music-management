@@ -9,6 +9,7 @@ This is a collection of music management tools for handling live show collection
 1. **Phish Collection Tools** (`bin/`): Python scripts for comparing, renaming, and merging Phish live show collections
 2. **Sync Scripts** (`sync/`): Bash scripts that use rsync to synchronize music collections between local storage, NAS backup, and Plex media server
 3. **ZSH Functions** (`zsh/functions/`): Audio conversion and metadata utilities
+4. **Borg Backup** (`bin/borg-backup`, `systemd/`): Bash script and systemd units for nightly incremental backup of the music library to a local NAS using Borg. Retention: 30 daily + 4 weekly + 12 monthly.
 
 ## Key Architecture Patterns
 
@@ -67,6 +68,27 @@ bin/phish-merge --phase 4 --dry-run
 ./sync/music-sync --help             # Show available artists and usage
 ```
 
+### Borg Backup
+```bash
+# Run smoke test (uses temp dirs, safe anytime)
+bin/borg-backup-test
+
+# Check next scheduled run
+systemctl list-timers borg-music-backup
+
+# View last backup log
+journalctl -u borg-music-backup.service -n 200
+
+# List all archives
+borg list /data/media-nas/Backups/borg
+
+# One-time deployment (after cloning on a new machine)
+# Edit ExecStart in systemd/borg-music-backup.service to match your checkout path
+sudo cp systemd/borg-music-backup.{service,timer} /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now borg-music-backup.timer
+```
+
 ### Audio Functions (from zsh/functions/)
 ```bash
 flac2alac "Artist Name" "Album Name"   # Convert FLAC to ALAC with corrected tags
@@ -121,18 +143,24 @@ Required external tools:
 - `bats` — For running bats tests locally
 - `pyenv` — For managing Python version
 - `pytest` — For running Python tests locally
+- `borg` 1.2+ — Incremental backup for music library (`sudo apt-get install borgbackup`)
 
 ## File Structure
 
-- `bin/` — Phish collection Python tools
+- `bin/` — Phish collection Python tools and Borg backup scripts
   - `phish-rename` — Rename downloads to canonical LivePhish format
   - `phish-compare` — Compare existing collection vs torrent (read-only)
   - `phish-merge` — Merge torrent into existing collection
+  - `borg-backup` — Incremental Borg backup: init, create, prune, compact
+  - `borg-backup-test` — Smoke test helper using temp directories (safe to run anytime)
 - `sync/` — Music synchronization scripts and configurations
   - `config/` — Configuration files (global environment settings and per-artist configs)
   - `lib/` — Shared library functions (sync-lib.sh)
   - `music-sync` — Unified sync script for all artists
   - `*-excludes.txt` — Lists of studio albums/folders to exclude from live-only syncs
+- `systemd/` — Systemd unit files for scheduled backup
+  - `borg-music-backup.service` — Service that runs `bin/borg-backup`
+  - `borg-music-backup.timer` — Nightly trigger (2am, persistent)
 - `zsh/functions/` — Audio utility functions designed for zsh
 - `tests/` — Test suite
   - `*.bats` — Bats tests for sync scripts

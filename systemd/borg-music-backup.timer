@@ -1,0 +1,11 @@
+[Unit]
+Description=Nightly Borg Music Library Backup Timer
+
+[Timer]
+OnCalendar=*-*-* 02:00:00
+Persistent=true
+RandomizedDelaySec=300
+Unit=borg-music-backup.service
+
+[Install]
+WantedBy=timers.target

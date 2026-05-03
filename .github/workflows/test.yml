@@ -57,6 +57,7 @@ jobs:
       - name: Run ShellCheck on sync scripts
         run: |
           find sync -name "*.sh" -o -name "music-sync" -o -name "sync-*-to-plex" | xargs shellcheck -e SC1091
+          shellcheck bin/borg-backup bin/borg-backup-test
 
       - name: Run ShellCheck on test scripts
         run: |

@@ -1,0 +1,43 @@
+#!/bin/bash
+# Manual smoke test for bin/borg-backup.
+# Overrides BORG_SOURCE and BORG_REPO to temp directories so the full
+# init -> create -> prune -> compact cycle runs without touching production data.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+TMPDIR_BASE=$(mktemp -d)
+trap 'rm -rf "$TMPDIR_BASE"' EXIT
+
+FAKE_SOURCE="${TMPDIR_BASE}/music"
+FAKE_REPO_PARENT="${TMPDIR_BASE}/backups"
+
+mkdir -p "$FAKE_SOURCE"
+mkdir -p "$FAKE_REPO_PARENT"
+
+# Seed with a few dummy files so borg has something to back up
+echo "test track 1" > "${FAKE_SOURCE}/track1.flac"
+echo "test track 2" > "${FAKE_SOURCE}/track2.flac"
+mkdir -p "${FAKE_SOURCE}/Phish/2024-01-01"
+echo "setlist" > "${FAKE_SOURCE}/Phish/2024-01-01/notes.txt"
+
+echo "=== Borg Backup Smoke Test ==="
+echo "Source:  $FAKE_SOURCE"
+echo "Repo:    ${FAKE_REPO_PARENT}/borg"
+echo ""
+
+if [[ ! -x "${SCRIPT_DIR}/borg-backup" ]]; then
+    echo "Error: ${SCRIPT_DIR}/borg-backup not found — run Task 3 first" >&2
+    exit 1
+fi
+
+BORG_BACKUP_SOURCE="$FAKE_SOURCE" \
+BORG_BACKUP_REPO="${FAKE_REPO_PARENT}/borg" \
+    "${SCRIPT_DIR}/borg-backup"
+
+echo ""
+echo "=== Archives in test repo ==="
+/usr/bin/borg list "${FAKE_REPO_PARENT}/borg"
+
+echo ""
+echo "=== Smoke test PASSED ==="
