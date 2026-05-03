@@ -55,13 +55,69 @@ fi
 
 ARCHIVE_NAME="${HOSTNAME}-$(date +%Y-%m-%dT%H:%M:%S)"
 
+echo "=== Calculating source size ==="
+BORG_PROGRESS_TOTAL=$(du -sb "$BORG_SOURCE" | cut -f1)
+export BORG_PROGRESS_TOTAL
+echo "Source: $(numfmt --to=iec "$BORG_PROGRESS_TOTAL")"
+
+# Store the progress filter as a variable so it can be used in the pipeline
+# (heredoc << syntax conflicts with pipes by overriding stdin)
+read -r -d '' PROGRESS_FILTER << 'PYEOF' || true
+import sys, json, os
+
+total = int(os.environ.get('BORG_PROGRESS_TOTAL', '0'))
+last_bucket = -1
+threshold = 10
+
+for line in sys.stdin:
+    line = line.rstrip('\n')
+    if not line:
+        continue
+    try:
+        d = json.loads(line)
+        msg_type = d.get('type', '')
+
+        if msg_type == 'archive_progress':
+            if d.get('finished'):
+                nf = d.get('nfiles', 0)
+                sz = d.get('original_size', 0)
+                print(f'Progress: done  {sz/1073741824:.2f} GB  {nf:,} files', flush=True)
+            elif total > 0:
+                orig = d.get('original_size', 0)
+                if orig > 0:
+                    pct = int(orig * 100 / total)
+                    bucket = (pct // threshold) * threshold
+                    if bucket > last_bucket and bucket > 0:
+                        last_bucket = bucket
+                        nf = d.get('nfiles', 0)
+                        print(f'Progress: ~{bucket}%  {orig/1073741824:.2f} GB / {total/1073741824:.2f} GB  {nf:,} files', flush=True)
+
+        elif msg_type == 'log_message':
+            lvl = d.get('levelname', 'INFO')
+            msg = d.get('message', '').rstrip()
+            if msg:
+                print(f'[{lvl}] {msg}', flush=True)
+
+        elif msg_type == 'progress_message':
+            pass  # suppress borg's internal cache/operation progress messages
+
+        else:
+            print(line, flush=True)
+
+    except (json.JSONDecodeError, ValueError):
+        if line.strip():
+            print(line, flush=True)
+PYEOF
+
 echo "=== Creating archive: $ARCHIVE_NAME ==="
 "$BORG" create \
     --compression lz4 \
     --stats \
     --show-rc \
+    --progress \
+    --log-json \
     "${BORG_REPO}::${ARCHIVE_NAME}" \
-    "$BORG_SOURCE"
+    "$BORG_SOURCE" 2>&1 | python3 -c "$PROGRESS_FILTER"
 
 echo ""
 echo "=== Pruning old archives ==="
