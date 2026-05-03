@@ -44,6 +44,9 @@ if [[ ! -d "$BORG_REPO_PARENT" ]]; then
     exit 1
 fi
 
+# Suppress borg's interactive prompt when accessing an unencrypted repo for the first time
+export BORG_UNKNOWN_UNENCRYPTED_REPO_ACCESS_IS_OK=yes
+
 # Initialize repository on first run
 if [[ ! -d "$BORG_REPO" ]]; then
     echo "=== Initializing Borg repository at $BORG_REPO ==="
