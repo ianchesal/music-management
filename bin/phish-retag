@@ -96,6 +96,52 @@ def dot_normalize(s: str) -> str:
     return re.sub(r"\.{2,}", ".", s)
 
 
+# ── Venue/city resolution ──────────────────────────────────────────────────────
+
+# Last "<segment>, XX" in a tag: the city candidate and its state/country code.
+CITY_STATE_RE = re.compile(r"([^,]+),\s*([A-Z]{2})(?![A-Za-z])")
+
+
+def split_venue_city(location_dots: str, album_tag):
+    """Split a dot-separated location into "Venue, City, ST" using the City, ST
+    already present in an album tag. Returns None when the tag doesn't yield a
+    usable, verifiable split (caller falls back to livephish)."""
+    m = re.match(r"^(.+)\.([A-Z]{2})$", location_dots)
+    if not m:
+        return None
+    loc_head, state = m.group(1), m.group(2)
+
+    matches = CITY_STATE_RE.findall(album_tag or "")
+    if not matches:
+        return None
+    city_text, tag_state = matches[-1]
+    if tag_state != state:
+        return None
+
+    norm_head = dot_normalize(loc_head)
+    # The tag's city segment may carry prefix junk ("Phish - 2026_07_21 Syracuse").
+    # Try the longest word-suffix first so multi-word cities win over their own
+    # tails ("New York" must beat "York").
+    words = city_text.split()
+    for start in range(len(words)):
+        candidate = " ".join(words[start:]).strip()
+        city_dots = dot_normalize(location_to_dots(candidate))
+        if not city_dots:
+            continue
+        if norm_head == city_dots:
+            return None  # venue would be empty
+        if norm_head.endswith("." + city_dots):
+            venue = norm_head[: -(len(city_dots) + 1)].replace(".", " ")
+            return f"{venue}, {candidate}, {state}"
+    return None
+
+
+def round_trip_ok(resolved: str, location_dots: str) -> bool:
+    """Hard invariant: re-dotting the resolved location must reproduce the
+    directory's location string — that is exactly how dir names were built."""
+    return dot_normalize(location_to_dots(resolved)) == dot_normalize(location_dots)
+
+
 def main():
     pass
 
