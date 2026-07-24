@@ -475,6 +475,30 @@ class TestTagIO:
         assert pt.read_album(junk) is None
         assert pt.write_album(junk, "x") is False
 
+    @pytest.mark.parametrize("ext", ["flac", "m4a", "mp3"])
+    def test_write_then_read_discnumber(self, audio_fixtures, tmp_path, ext):
+        f = make_show_file(audio_fixtures, tmp_path, f"track.{ext}")
+        assert pt.write_discnumber(f, "2") is True
+        assert pt.read_discnumber(f) == "2"
+
+    @pytest.mark.parametrize("ext", ["flac", "m4a", "mp3"])
+    def test_missing_discnumber_reads_empty_string(self, audio_fixtures, tmp_path, ext):
+        f = make_show_file(audio_fixtures, tmp_path, f"track.{ext}")
+        assert pt.read_discnumber(f) == ""
+
+    def test_discnumber_write_preserves_album(self, audio_fixtures, tmp_path):
+        f = make_show_file(audio_fixtures, tmp_path, "track.flac",
+                           album="1994/05/07 Dallas, TX")
+        pt.write_discnumber(f, "1")
+        assert pt.read_album(f) == "1994/05/07 Dallas, TX"
+        assert pt.read_discnumber(f) == "1"
+
+    def test_unreadable_file_discnumber_returns_none(self, tmp_path):
+        junk = tmp_path / "junk.flac"
+        junk.write_bytes(b"not audio at all")
+        assert pt.read_discnumber(junk) is None
+        assert pt.write_discnumber(junk, "1") is False
+
 
 class TestCollectAudio:
     def test_finds_audio_recursively_and_sorted(self, audio_fixtures, tmp_path):

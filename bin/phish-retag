@@ -351,6 +351,28 @@ def write_album(path: Path, album: str) -> bool:
     return True
 
 
+def read_discnumber(path: Path):
+    """Discnumber tag of an audio file: None if unreadable, "" if untagged."""
+    audio = _open_audio(path)
+    if audio is None:
+        return None
+    if audio.tags is None:
+        return ""
+    values = audio.get("discnumber")
+    return values[0] if values else ""
+
+
+def write_discnumber(path: Path, discnumber: str) -> bool:
+    audio = _open_audio(path)
+    if audio is None:
+        return False
+    if audio.tags is None:
+        audio.add_tags()
+    audio["discnumber"] = discnumber
+    audio.save()
+    return True
+
+
 # ── Main logic ─────────────────────────────────────────────────────────────────
 
 def main_logic(path: Path, execute: bool, cache_path: Path) -> dict:
