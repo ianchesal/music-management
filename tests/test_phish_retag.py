@@ -366,3 +366,117 @@ class TestCollectAudio:
         f = make_show_file(audio_fixtures, tmp_path, "track.flac")
         f.rename(tmp_path / "TRACK.FLAC")
         assert [p.name for p in pt.collect_audio(tmp_path)] == ["TRACK.FLAC"]
+
+
+def build_collection(audio_fixtures, root):
+    """A miniature collection covering every per-directory outcome."""
+    # Needs retag (heuristic-resolvable from its own tag)
+    d1 = root / "Phish-2026-07-21.Empower.Federal.Credit.Union.Amphitheater.at.Lakeview.Syracuse.NY.[2760]"
+    make_show_file(audio_fixtures, d1, "t1.flac",
+                   album="Phish - Phish - 2026_07_21 Syracuse, NY (Phis)")
+    make_show_file(audio_fixtures, d1, "t2.flac",
+                   album="Phish - Phish - 2026_07_21 Syracuse, NY (Phis)")
+    # Already correct
+    d2 = root / "Phish-2026-07-12.Ruoff.Music.Center.Noblesville.IN.[2754]"
+    make_show_file(audio_fixtures, d2, "t1.flac",
+                   album="2026/07/12 Ruoff Music Center, Noblesville, IN")
+    # Multi-set: two distinct tags
+    d3 = root / "Phish-1994-12-29.Providence.Civic.Center.Providence.RI.[498]"
+    make_show_file(audio_fixtures, d3, "s1.flac", album="1994/12/29 I Providence, RI")
+    make_show_file(audio_fixtures, d3, "s2.flac", album="1994/12/29 II Providence, RI")
+    # Unresolvable: garbage tag, livephish will be mocked to miss
+    d4 = root / "Phish-1999-12-31.Big.Cypress.Seminole.Reservation.Big.Cypress.FL.[100]"
+    make_show_file(audio_fixtures, d4, "t1.flac", album="Big Cypress New Years")
+    # Non-canonical: skipped
+    d5 = root / "Live Bait Vol. 09"
+    make_show_file(audio_fixtures, d5, "t1.flac", album="Live Bait Vol. 09")
+    return d1, d2, d3, d4, d5
+
+
+class TestMainLogic:
+    def _run(self, root, cache_file, execute):
+        with patch.object(pt, "livephish_location", return_value=None):
+            return pt.main_logic(root, execute=execute, cache_path=cache_file)
+
+    def test_dry_run_reports_but_does_not_write(self, audio_fixtures, tmp_path, capsys):
+        root = tmp_path / "col"
+        d1, *_ = build_collection(audio_fixtures, root)
+        counts = self._run(root, tmp_path / "c.json", execute=False)
+        assert counts == {"updated": 1, "already": 1, "multiset": 1,
+                          "unresolved": 1, "skipped": 1}
+        # Tags untouched in dry run
+        assert pt.read_album(d1 / "t1.flac") == "Phish - Phish - 2026_07_21 Syracuse, NY (Phis)"
+        out = capsys.readouterr().out
+        assert "2026/07/21 Empower Federal Credit Union Amphitheater at Lakeview, Syracuse, NY" in out
+
+    def test_dry_run_warms_cache(self, audio_fixtures, tmp_path):
+        root = tmp_path / "col"
+        build_collection(audio_fixtures, root)
+        cache_file = tmp_path / "c.json"
+        self._run(root, cache_file, execute=False)
+        cache = json.loads(cache_file.read_text())
+        assert cache["2760"] == "Empower Federal Credit Union Amphitheater at Lakeview, Syracuse, NY"
+
+    def test_execute_writes_album_tags(self, audio_fixtures, tmp_path):
+        root = tmp_path / "col"
+        d1, d2, d3, d4, d5 = build_collection(audio_fixtures, root)
+        self._run(root, tmp_path / "c.json", execute=True)
+        want = "2026/07/21 Empower Federal Credit Union Amphitheater at Lakeview, Syracuse, NY"
+        assert pt.read_album(d1 / "t1.flac") == want
+        assert pt.read_album(d1 / "t2.flac") == want
+        # multiset, unresolved, and non-canonical dirs untouched
+        assert pt.read_album(d3 / "s1.flac") == "1994/12/29 I Providence, RI"
+        assert pt.read_album(d4 / "t1.flac") == "Big Cypress New Years"
+        assert pt.read_album(d5 / "t1.flac") == "Live Bait Vol. 09"
+
+    def test_already_correct_files_keep_mtime_on_execute(self, audio_fixtures, tmp_path):
+        root = tmp_path / "col"
+        _, d2, *_ = build_collection(audio_fixtures, root)
+        f = d2 / "t1.flac"
+        before = f.stat().st_mtime_ns
+        self._run(root, tmp_path / "c.json", execute=True)
+        assert f.stat().st_mtime_ns == before
+
+    def test_multiset_warning_lists_distinct_tags(self, audio_fixtures, tmp_path, capsys):
+        root = tmp_path / "col"
+        build_collection(audio_fixtures, root)
+        self._run(root, tmp_path / "c.json", execute=False)
+        err = capsys.readouterr().err
+        assert "1994/12/29 I Providence, RI" in err
+        assert "1994/12/29 II Providence, RI" in err
+
+    def test_summary_lists_multiset_and_unresolved_dirs(self, audio_fixtures, tmp_path, capsys):
+        root = tmp_path / "col"
+        build_collection(audio_fixtures, root)
+        self._run(root, tmp_path / "c.json", execute=False)
+        out = capsys.readouterr().out
+        assert "Phish-1994-12-29.Providence.Civic.Center.Providence.RI.[498]" in out
+        assert "Phish-1999-12-31.Big.Cypress.Seminole.Reservation.Big.Cypress.FL.[100]" in out
+
+    def test_empty_dir_counts_as_skipped(self, audio_fixtures, tmp_path):
+        root = tmp_path / "col"
+        (root / "Phish-2026-07-22.Madison.Square.Garden.New.York.NY.[2761]").mkdir(parents=True)
+        counts = self._run(root, tmp_path / "c.json", execute=False)
+        assert counts == {"updated": 0, "already": 0, "multiset": 0,
+                          "unresolved": 0, "skipped": 1}
+
+
+class TestParseArgs:
+    def test_defaults(self):
+        path, execute, cache = pt.parse_args(["phish-retag"])
+        assert path == pt.DEFAULT_PATH
+        assert execute is False
+        assert cache == pt.default_cache_path()
+
+    def test_positional_path_and_execute(self, tmp_path):
+        path, execute, cache = pt.parse_args(["phish-retag", str(tmp_path), "--execute"])
+        assert path == tmp_path
+        assert execute is True
+
+    def test_cache_flag(self, tmp_path):
+        _, _, cache = pt.parse_args(["phish-retag", str(tmp_path), "--cache", "/tmp/x.json"])
+        assert cache == Path("/tmp/x.json")
+
+    def test_unknown_flag_exits(self, tmp_path):
+        with pytest.raises(SystemExit):
+            pt.parse_args(["phish-retag", str(tmp_path), "--bogus"])
