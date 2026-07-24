@@ -139,6 +139,32 @@ def match_set_marker(remainder):
     return SET_MARKER_TO_DISC[m.group(1)], remainder[m.end():].lstrip()
 
 
+def classify_clean_multiset(distinct_tags, date):
+    """distinct_tags: the directory's distinct album tags. date: the
+    directory's own date, 'YYYY-MM-DD' (as returned by parse_show_dirname).
+
+    Returns {tag: disc_number} for every tag if this is a clean multi-set
+    show — every tag's date matches the directory's date, every tag has a
+    set marker (I-V) right after the date, and the location text after the
+    marker is identical across every tag. Returns None otherwise (caller
+    routes the directory to the anomaly bucket)."""
+    want = tuple(int(p) for p in date.split("-"))
+    result = {}
+    remainders = set()
+    for tag in distinct_tags:
+        if parse_date_token(tag) != want:
+            return None
+        marker = match_set_marker(strip_date_token(tag))
+        if marker is None:
+            return None
+        disc, remainder = marker
+        result[tag] = disc
+        remainders.add(remainder)
+    if len(remainders) != 1:
+        return None
+    return result
+
+
 # ── Venue/city resolution ──────────────────────────────────────────────────────
 
 # Last "<segment>, XX" in a tag: the city candidate and its state/country code.

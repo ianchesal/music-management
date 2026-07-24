@@ -126,6 +126,64 @@ class TestMatchSetMarker:
         assert pt.match_set_marker("Chicago, IL (soundcheck)") is None
 
 
+class TestClassifyCleanMultiset:
+    def test_two_set_show(self):
+        assert pt.classify_clean_multiset(
+            ["1994/05/07 I Dallas, TX", "1994/05/07 II Dallas, TX"],
+            "1994-05-07",
+        ) == {"1994/05/07 I Dallas, TX": 1, "1994/05/07 II Dallas, TX": 2}
+
+    def test_three_set_show(self):
+        assert pt.classify_clean_multiset(
+            ["1995/12/31 I New York, NY", "1995/12/31 II New York, NY",
+             "1995/12/31 III New York, NY"],
+            "1995-12-31",
+        ) == {"1995/12/31 I New York, NY": 1, "1995/12/31 II New York, NY": 2,
+              "1995/12/31 III New York, NY": 3}
+
+    def test_four_set_show(self):
+        # Real show: Super Ball IX, 2011-07-02, four sets.
+        tags = ["2011/07/02 I Super Ball IX, NY", "2011/07/02 II Super Ball IX, NY",
+                "2011/07/02 III Super Ball IX, NY", "2011/07/02 IV Super Ball IX, NY"]
+        result = pt.classify_clean_multiset(tags, "2011-07-02")
+        assert result == {tags[0]: 1, tags[1]: 2, tags[2]: 3, tags[3]: 4}
+
+    def test_non_zero_padded_date_still_matches(self):
+        assert pt.classify_clean_multiset(
+            ["1996/12/6 I Las Vegas, NV", "1996/12/6 II Las Vegas, NV"],
+            "1996-12-06",
+        ) == {"1996/12/6 I Las Vegas, NV": 1, "1996/12/6 II Las Vegas, NV": 2}
+
+    def test_mismatched_date_is_anomaly(self):
+        # Real contamination shape: a bonus track from a different show/date.
+        tags = ["1994/12/01 I Salem, OR", "1994/12/01 II Salem, OR",
+                "1994/11/12 II Kent, OH"]
+        assert pt.classify_clean_multiset(tags, "1994-12-01") is None
+
+    def test_missing_marker_is_anomaly(self):
+        # Soundcheck-style tag alongside otherwise-clean sets.
+        tags = ["1994/06/18 Chicago, IL (soundcheck)",
+                "1994/06/18 I Chicago, IL", "1994/06/18 II Chicago, IL"]
+        assert pt.classify_clean_multiset(tags, "1994-06-18") is None
+
+    def test_xl_center_style_tags_are_anomaly(self):
+        # Regression: two distinct tags on the real XL Center directory
+        # shape, neither a genuine set marker.
+        tags = ["2013/10/27 XL Center, Hartford, CT",
+                "2013/10/27 XL Center, Hartford, CT (soundcheck)"]
+        assert pt.classify_clean_multiset(tags, "2013-10-27") is None
+
+    def test_remainder_mismatch_is_anomaly(self):
+        # Valid markers on both, but they disagree on venue/city text.
+        tags = ["1994/05/07 I Dallas, TX", "1994/05/07 II Fort Worth, TX"]
+        assert pt.classify_clean_multiset(tags, "1994-05-07") is None
+
+    def test_casing_only_difference_with_no_marker_is_anomaly(self):
+        # Real data: two files differing only by tag casing, no set marker.
+        tags = ["2017/07/14 Chicago, IL", "2017/07/14 Chicago, Il"]
+        assert pt.classify_clean_multiset(tags, "2017-07-14") is None
+
+
 class TestSplitVenueCity:
     def test_simple_city(self):
         assert pt.split_venue_city(
