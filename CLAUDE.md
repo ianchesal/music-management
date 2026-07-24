@@ -15,18 +15,18 @@ This is a collection of music management tools for handling live show collection
 
 ### Phish Collection Tools (`bin/`)
 
-Three Python tools designed to work together as a pipeline when integrating a LivePhish torrent download with an existing collection:
+Three Python tools designed to work together as a pipeline when integrating a LivePhish torrent download with an existing collection, plus a standalone tag normalizer:
 
 - **`phish-rename`** — Queries livephish.com to rename show directories from any date-based format to `Phish-YYYY-MM-DD.Dot.Separated.Location.[LivePhishID]`. Requires `requests` and `beautifulsoup4`.
 - **`phish-compare`** — Read-only diagnostic: shows matched/unmatched shows, studio album cross-references, and undated items in both the existing collection and torrent.
 - **`phish-merge`** — Performs the actual merge in up to four phases: (1) rsync backup to NAS, (2) copy torrent-only shows, (3) replace matched shows with canonical torrent copies, (4) rename existing-only shows to torrent naming style. Supports `--dry-run` and `--phase N`.
 - **`phish-retag`** — Normalizes the album tag on every audio file in canonical show directories to `YYYY/MM/DD Venue, City, ST`, derived from the directory name. Venue/city boundaries resolve from existing tags when possible, falling back to livephish.com (jittered requests, results cached in `$XDG_CACHE_HOME/phish-retag.json`). Multi-set directories (more than one distinct album tag) are skipped with a warning. Only the album tag is touched. Requires `mutagen`.
 
-All three tools share the same date-extraction logic and default paths:
+All four tools share the same date-extraction logic, and the collection tools share these default paths:
 - `DEFAULT_EXISTING = /data/media/Sorted/Unsorted/Music/Phish`
 - `DEFAULT_TORRENT  = /data/torrents/Phish-Live.Phish.Project-2002-2026`
 
-Python deps: `pip install -r requirements.txt` (`requests`, `beautifulsoup4`).
+Python deps: `pip install -r requirements.txt` (`requests`, `beautifulsoup4`, `mutagen`).
 
 ### Sync Script Pattern
 All sync scripts follow a common pattern:
@@ -137,7 +137,7 @@ cd tests && bats *.bats && cd .. && pytest tests/
 - Bats test configs use `TEST_TMP_DIR` paths so directories actually exist for validation
 - Use `assert_rsync_called_with` and `assert_file_exists` helpers for common bats assertions
 - Pytest tests load `bin/phish-rename`, `bin/phish-merge`, and `bin/phish-retag` as modules using `SourceFileLoader` (files have no `.py` extension)
-- When adding new phish-merge or phish-rename behavior, add pytest tests alongside; when adding sync-lib behavior, add bats tests
+- When adding new phish-merge, phish-rename, or phish-retag behavior, add pytest tests alongside; when adding sync-lib behavior, add bats tests
 
 ## Dependencies
 
