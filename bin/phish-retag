@@ -1,0 +1,104 @@
+#!/usr/bin/env python3
+"""
+phish-retag — Normalize album tags on Phish show audio files.
+
+Scans PATH for canonical show directories
+(Phish-YYYY-MM-DD.Dot.Separated.Location.[LivePhishID]) and rewrites the
+album tag on every audio file to:
+  YYYY/MM/DD Venue, City, ST
+
+Only the album tag is touched. Multi-set directories (more than one distinct
+album tag) are skipped with a warning. Venue/city boundaries are resolved
+from existing tags when possible, falling back to livephish.com; results are
+cached so repeat runs make no network requests.
+
+Usage:
+  phish-retag [PATH]
+  phish-retag [PATH] --execute
+  phish-retag [PATH] --cache FILE
+
+Options:
+  PATH          Collection directory [default: /data/media/Sorted/Unsorted/Music/Phish]
+  --execute     Apply tag changes (default is dry run)
+  --cache FILE  Location cache [default: $XDG_CACHE_HOME/phish-retag.json]
+  -h, --help    Show this message
+"""
+
+import json
+import os
+import random
+import re
+import sys
+import time
+from pathlib import Path
+
+import mutagen
+import requests
+from bs4 import BeautifulSoup
+
+# ── Terminal ───────────────────────────────────────────────────────────────────
+
+USE_COLOR = sys.stdout.isatty()
+
+
+def _ansi(code, s):
+    return f"\033[{code}m{s}\033[0m" if USE_COLOR else s
+
+
+def bold(s):   return _ansi("1",  s)
+def dim(s):    return _ansi("2",  s)
+def yellow(s): return _ansi("93", s)
+def green(s):  return _ansi("92", s)
+
+
+# ── Constants ──────────────────────────────────────────────────────────────────
+
+DEFAULT_PATH = Path("/data/media/Sorted/Unsorted/Music/Phish")
+
+AUDIO_EXTS = {".flac", ".m4a", ".mp3"}
+
+SEARCH_URL = (
+    "https://www.livephish.com/on/demandware.store/"
+    "Sites-LivePhish-Site/default/Search-Show"
+    "?search-button=&q={date}&lang=default"
+)
+
+HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    )
+}
+
+SHOW_DIR_RE = re.compile(r"^Phish-(\d{4}-\d{2}-\d{2})\.(.+)\.\[(\d+)\]$")
+
+# ── Name parsing ───────────────────────────────────────────────────────────────
+
+def parse_show_dirname(dirname: str):
+    """Return (date, location_dots, release_id) for a canonical show dir, else None."""
+    m = SHOW_DIR_RE.match(dirname)
+    if not m:
+        return None
+    return m.group(1), m.group(2), m.group(3)
+
+
+def location_to_dots(location_str: str) -> str:
+    # Same transform phish-rename uses to build directory names.
+    name = location_str.strip()
+    name = name.replace(",", "")
+    name = re.sub(r"\s+", ".", name.strip())
+    return name.strip(".")
+
+
+def dot_normalize(s: str) -> str:
+    # "St. Louis" dots to "St..Louis" while directory names carry "St.Louis";
+    # collapse runs so the two compare equal.
+    return re.sub(r"\.{2,}", ".", s)
+
+
+def main():
+    pass
+
+
+if __name__ == "__main__":
+    main()
