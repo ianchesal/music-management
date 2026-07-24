@@ -7,10 +7,15 @@ Scans PATH for canonical show directories
 album tag on every audio file to:
   YYYY/MM/DD Venue, City, ST
 
-Only the album tag is touched. Multi-set directories (more than one distinct
-album tag) are skipped with a warning. Venue/city boundaries are resolved
-from existing tags when possible, falling back to livephish.com; results are
-cached so repeat runs make no network requests.
+Only the album and discnumber tags are touched. A "clean" multi-set show —
+one whose distinct album tags differ only by a set marker (I-V) right after
+the date, with matching venue/city text otherwise — has its set marker
+converted to a discnumber tag and its album collapsed to the same uniform
+format. Messier multi-set directories (contamination, missing markers,
+disagreeing venue text) are skipped with a warning, same as before. Venue/
+city boundaries are resolved from existing tags when possible, falling back
+to livephish.com; results are cached so repeat runs make no network
+requests.
 
 Usage:
   phish-retag [PATH]
@@ -376,9 +381,9 @@ def write_discnumber(path: Path, discnumber: str) -> bool:
 # ── Main logic ─────────────────────────────────────────────────────────────────
 
 def main_logic(path: Path, execute: bool, cache_path: Path) -> dict:
-    counts = {"updated": 0, "already": 0, "multiset": 0,
-              "unresolved": 0, "skipped": 0}
-    multiset_dirs = []
+    counts = {"updated": 0, "already": 0, "multiset_clean": 0,
+              "multiset_anomaly": 0, "unresolved": 0, "skipped": 0}
+    multiset_anomaly_dirs = []
     unresolved_dirs = []
     files_updated = 0
     cache = load_cache(cache_path)
@@ -411,12 +416,55 @@ def main_logic(path: Path, execute: bool, cache_path: Path) -> dict:
 
         distinct = sorted(set(albums.values()))
         if len(distinct) > 1:
-            counts["multiset"] += 1
-            multiset_dirs.append(entry.name)
-            print(f"  {yellow('MULTISET')}  {entry.name} — skipped, distinct album tags:",
-                  file=sys.stderr)
-            for tag in distinct:
-                print(f"      {tag or '(no album tag)'}", file=sys.stderr)
+            clean = classify_clean_multiset(distinct, date)
+            if clean is None:
+                counts["multiset_anomaly"] += 1
+                multiset_anomaly_dirs.append(entry.name)
+                print(f"  {yellow('MULTISET-ANOMALY')}  {entry.name} — skipped, distinct album tags:",
+                      file=sys.stderr)
+                for tag in distinct:
+                    print(f"      {tag or '(no album tag)'}", file=sys.stderr)
+                continue
+
+            source_tag = next(tag for tag, disc in clean.items() if disc == 1)
+            resolved = resolve_location(date, location_dots, release_id,
+                                        source_tag, cache, cache_path)
+            if resolved is None:
+                counts["unresolved"] += 1
+                unresolved_dirs.append(entry.name)
+                print(f"  {yellow('UNRESOLVED')} {entry.name}", file=sys.stderr)
+                continue
+
+            target = target_album(date, resolved)
+            all_correct = all(
+                albums[f] == target and read_discnumber(f) == str(clean[albums[f]])
+                for f in files if f in albums
+            )
+            if all_correct:
+                counts["already"] += 1
+                continue
+
+            counts["updated"] += 1
+            counts["multiset_clean"] += 1
+            prefix = "[DRY RUN] " if not execute else ""
+            print(f"  {prefix}{entry.name}")
+            for tag in sorted(clean, key=clean.get):
+                print(f"      Disc {clean[tag]}: {tag} → {green(target)}")
+            for f in files:
+                if f not in albums:
+                    continue
+                tag = albums[f]
+                disc_str = str(clean[tag])
+                if albums.get(f) == target and read_discnumber(f) == disc_str:
+                    continue
+                if execute:
+                    if not write_album(f, target):
+                        print(f"  {yellow('WARN')} could not write tag: {f}", file=sys.stderr)
+                        continue
+                    if not write_discnumber(f, disc_str):
+                        print(f"  {yellow('WARN')} could not write discnumber: {f}", file=sys.stderr)
+                        continue
+                files_updated += 1
             continue
 
         current = distinct[0] if distinct else ""
@@ -453,12 +501,13 @@ def main_logic(path: Path, execute: bool, cache_path: Path) -> dict:
     verb = "updated" if execute else "would update"
     print(f"  {green(str(counts['updated']))}  shows {verb} ({files_updated} files)")
     print(f"  {dim(str(counts['already']))}  already correct")
-    print(f"  {yellow(str(counts['multiset']))}  multi-set (skipped, fix manually)")
+    print(f"  {green(str(counts['multiset_clean']))}  multi-set shows auto-fixed (set marker → disc)")
+    print(f"  {yellow(str(counts['multiset_anomaly']))}  multi-set anomalies (skipped, fix manually)")
     print(f"  {yellow(str(counts['unresolved']))}  unresolved")
     print(f"  {dim(str(counts['skipped']))}  skipped (non-canonical or no audio)")
-    if multiset_dirs:
-        print(f"\n  {bold('MULTI-SET DIRECTORIES')} (manual assessment needed)")
-        for name in multiset_dirs:
+    if multiset_anomaly_dirs:
+        print(f"\n  {bold('MULTI-SET ANOMALIES')} (manual assessment needed)")
+        for name in multiset_anomaly_dirs:
             print(f"      {name}")
     if unresolved_dirs:
         print(f"\n  {bold('UNRESOLVED DIRECTORIES')} (location could not be verified)")

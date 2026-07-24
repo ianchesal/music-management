@@ -528,7 +528,7 @@ def build_collection(audio_fixtures, root):
     d2 = root / "Phish-2026-07-12.Ruoff.Music.Center.Noblesville.IN.[2754]"
     make_show_file(audio_fixtures, d2, "t1.flac",
                    album="2026/07/12 Ruoff Music Center, Noblesville, IN")
-    # Multi-set: two distinct tags
+    # Clean multi-set: two distinct tags differing only by set marker
     d3 = root / "Phish-1994-12-29.Providence.Civic.Center.Providence.RI.[498]"
     make_show_file(audio_fixtures, d3, "s1.flac", album="1994/12/29 I Providence, RI")
     make_show_file(audio_fixtures, d3, "s2.flac", album="1994/12/29 II Providence, RI")
@@ -538,7 +538,13 @@ def build_collection(audio_fixtures, root):
     # Non-canonical: skipped
     d5 = root / "Live Bait Vol. 09"
     make_show_file(audio_fixtures, d5, "t1.flac", album="Live Bait Vol. 09")
-    return d1, d2, d3, d4, d5
+    # Multi-set anomaly: real contamination shape — a track internally
+    # tagged with a different date/venue mixed into an otherwise-clean pair.
+    d6 = root / "Phish-1994-12-01.Salem.Armory.Salem.OR.[359]"
+    make_show_file(audio_fixtures, d6, "s1.flac", album="1994/12/01 I Salem, OR")
+    make_show_file(audio_fixtures, d6, "s2.flac", album="1994/12/01 II Salem, OR")
+    make_show_file(audio_fixtures, d6, "bonus.flac", album="1994/11/12 II Kent, OH")
+    return d1, d2, d3, d4, d5, d6
 
 
 class TestMainLogic:
@@ -548,14 +554,18 @@ class TestMainLogic:
 
     def test_dry_run_reports_but_does_not_write(self, audio_fixtures, tmp_path, capsys):
         root = tmp_path / "col"
-        d1, *_ = build_collection(audio_fixtures, root)
+        d1, _, d3, *_ = build_collection(audio_fixtures, root)
         counts = self._run(root, tmp_path / "c.json", execute=False)
-        assert counts == {"updated": 1, "already": 1, "multiset": 1,
-                          "unresolved": 1, "skipped": 1}
+        assert counts == {"updated": 2, "already": 1, "multiset_clean": 1,
+                          "multiset_anomaly": 1, "unresolved": 1, "skipped": 1}
         # Tags untouched in dry run
         assert pt.read_album(d1 / "t1.flac") == "Phish - Phish - 2026_07_21 Syracuse, NY (Phis)"
+        assert pt.read_album(d3 / "s1.flac") == "1994/12/29 I Providence, RI"
+        assert pt.read_discnumber(d3 / "s1.flac") == ""
         out = capsys.readouterr().out
         assert "2026/07/21 Empower Federal Credit Union Amphitheater at Lakeview, Syracuse, NY" in out
+        assert "Disc 1: 1994/12/29 I Providence, RI" in out
+        assert "Disc 2: 1994/12/29 II Providence, RI" in out
 
     def test_dry_run_warms_cache(self, audio_fixtures, tmp_path):
         root = tmp_path / "col"
@@ -567,15 +577,22 @@ class TestMainLogic:
 
     def test_execute_writes_album_tags(self, audio_fixtures, tmp_path):
         root = tmp_path / "col"
-        d1, d2, d3, d4, d5 = build_collection(audio_fixtures, root)
+        d1, d2, d3, d4, d5, d6 = build_collection(audio_fixtures, root)
         self._run(root, tmp_path / "c.json", execute=True)
         want = "2026/07/21 Empower Federal Credit Union Amphitheater at Lakeview, Syracuse, NY"
         assert pt.read_album(d1 / "t1.flac") == want
         assert pt.read_album(d1 / "t2.flac") == want
-        # multiset, unresolved, and non-canonical dirs untouched
-        assert pt.read_album(d3 / "s1.flac") == "1994/12/29 I Providence, RI"
+        # clean multi-set: album collapsed, discnumber set per set
+        want_multiset = "1994/12/29 Providence Civic Center, Providence, RI"
+        assert pt.read_album(d3 / "s1.flac") == want_multiset
+        assert pt.read_discnumber(d3 / "s1.flac") == "1"
+        assert pt.read_album(d3 / "s2.flac") == want_multiset
+        assert pt.read_discnumber(d3 / "s2.flac") == "2"
+        # unresolved, non-canonical, and multi-set-anomaly dirs untouched
         assert pt.read_album(d4 / "t1.flac") == "Big Cypress New Years"
         assert pt.read_album(d5 / "t1.flac") == "Live Bait Vol. 09"
+        assert pt.read_album(d6 / "s1.flac") == "1994/12/01 I Salem, OR"
+        assert pt.read_album(d6 / "bonus.flac") == "1994/11/12 II Kent, OH"
 
     def test_already_correct_files_keep_mtime_on_execute(self, audio_fixtures, tmp_path):
         root = tmp_path / "col"
@@ -585,28 +602,43 @@ class TestMainLogic:
         self._run(root, tmp_path / "c.json", execute=True)
         assert f.stat().st_mtime_ns == before
 
-    def test_multiset_warning_lists_distinct_tags(self, audio_fixtures, tmp_path, capsys):
+    def test_multiset_clean_second_run_is_noop(self, audio_fixtures, tmp_path):
+        root = tmp_path / "col"
+        d3 = root / "Phish-1994-12-29.Providence.Civic.Center.Providence.RI.[498]"
+        make_show_file(audio_fixtures, d3, "s1.flac", album="1994/12/29 I Providence, RI")
+        make_show_file(audio_fixtures, d3, "s2.flac", album="1994/12/29 II Providence, RI")
+        cache_file = tmp_path / "c.json"
+        self._run(root, cache_file, execute=True)
+        f = d3 / "s1.flac"
+        before = f.stat().st_mtime_ns
+        counts = self._run(root, cache_file, execute=True)
+        assert counts["already"] == 1
+        assert counts["multiset_clean"] == 0
+        assert f.stat().st_mtime_ns == before
+
+    def test_multiset_anomaly_warning_lists_distinct_tags(self, audio_fixtures, tmp_path, capsys):
         root = tmp_path / "col"
         build_collection(audio_fixtures, root)
         self._run(root, tmp_path / "c.json", execute=False)
         err = capsys.readouterr().err
-        assert "1994/12/29 I Providence, RI" in err
-        assert "1994/12/29 II Providence, RI" in err
+        assert "1994/12/01 I Salem, OR" in err
+        assert "1994/12/01 II Salem, OR" in err
+        assert "1994/11/12 II Kent, OH" in err
 
-    def test_summary_lists_multiset_and_unresolved_dirs(self, audio_fixtures, tmp_path, capsys):
+    def test_summary_lists_multiset_anomaly_and_unresolved_dirs(self, audio_fixtures, tmp_path, capsys):
         root = tmp_path / "col"
         build_collection(audio_fixtures, root)
         self._run(root, tmp_path / "c.json", execute=False)
         out = capsys.readouterr().out
-        assert "Phish-1994-12-29.Providence.Civic.Center.Providence.RI.[498]" in out
+        assert "Phish-1994-12-01.Salem.Armory.Salem.OR.[359]" in out
         assert "Phish-1999-12-31.Big.Cypress.Seminole.Reservation.Big.Cypress.FL.[100]" in out
 
     def test_empty_dir_counts_as_skipped(self, audio_fixtures, tmp_path):
         root = tmp_path / "col"
         (root / "Phish-2026-07-22.Madison.Square.Garden.New.York.NY.[2761]").mkdir(parents=True)
         counts = self._run(root, tmp_path / "c.json", execute=False)
-        assert counts == {"updated": 0, "already": 0, "multiset": 0,
-                          "unresolved": 0, "skipped": 1}
+        assert counts == {"updated": 0, "already": 0, "multiset_clean": 0,
+                          "multiset_anomaly": 0, "unresolved": 0, "skipped": 1}
 
 
 class TestParseArgs:
