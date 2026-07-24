@@ -214,6 +214,34 @@ def livephish_location(date: str, release_id: str):
     return None
 
 
+def resolve_location(date: str, location_dots: str, release_id: str,
+                     album_tag, cache: dict, cache_path: Path):
+    """Resolve the comma-separated location for a show. Order: cache →
+    offline tag heuristic → livephish. Every result must pass the round-trip
+    invariant; failures return None (unresolved). Successes are persisted to
+    the cache immediately."""
+    cached = cache.get(release_id)
+    if cached is not None:
+        if round_trip_ok(cached, location_dots):
+            return cached
+        del cache[release_id]  # stale entry for this directory — re-resolve
+
+    resolved = split_venue_city(location_dots, album_tag)
+    if resolved is None:
+        resolved = livephish_location(date, release_id)
+
+    if resolved is None or not round_trip_ok(resolved, location_dots):
+        return None
+
+    cache[release_id] = resolved
+    save_cache(cache_path, cache)
+    return resolved
+
+
+def target_album(date: str, location: str) -> str:
+    return f"{date.replace('-', '/')} {location}"
+
+
 def main():
     pass
 

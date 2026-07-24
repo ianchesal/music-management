@@ -216,3 +216,72 @@ class TestLivephishLocation:
         with patch.object(pt, "search_livephish", return_value=FIXTURE_HTML_SEARCH), \
              patch.object(pt.time, "sleep"):
             assert pt.livephish_location("2026-07-22", "2762") is None
+
+
+class TestTargetAlbum:
+    def test_formats_date_with_slashes(self):
+        assert pt.target_album("2026-07-22", "Madison Square Garden, New York, NY") \
+            == "2026/07/22 Madison Square Garden, New York, NY"
+
+
+class TestResolveLocation:
+    LOC = "Madison.Square.Garden.New.York.NY"
+    RESOLVED = "Madison Square Garden, New York, NY"
+
+    def test_valid_cache_hit_skips_network(self, tmp_path):
+        cache = {"2761": self.RESOLVED}
+        with patch.object(pt, "livephish_location") as mock_lp:
+            out = pt.resolve_location("2026-07-22", self.LOC, "2761",
+                                      None, cache, tmp_path / "c.json")
+        assert out == self.RESOLVED
+        mock_lp.assert_not_called()
+
+    def test_stale_cache_entry_is_discarded_and_reresolved(self, tmp_path):
+        cache = {"2761": "Wrong Venue, Elsewhere, CA"}
+        with patch.object(pt, "livephish_location", return_value=self.RESOLVED):
+            out = pt.resolve_location("2026-07-22", self.LOC, "2761",
+                                      None, cache, tmp_path / "c.json")
+        assert out == self.RESOLVED
+        assert cache["2761"] == self.RESOLVED
+
+    def test_heuristic_resolves_offline(self, tmp_path):
+        cache = {}
+        with patch.object(pt, "livephish_location") as mock_lp:
+            out = pt.resolve_location("2026-07-22", self.LOC, "2761",
+                                      "2026/07/22 New York, NY", cache,
+                                      tmp_path / "c.json")
+        assert out == self.RESOLVED
+        mock_lp.assert_not_called()
+
+    def test_resolution_is_persisted_to_cache_file(self, tmp_path):
+        cache_file = tmp_path / "c.json"
+        pt.resolve_location("2026-07-22", self.LOC, "2761",
+                            "2026/07/22 New York, NY", {}, cache_file)
+        assert json.loads(cache_file.read_text())["2761"] == self.RESOLVED
+
+    def test_falls_back_to_livephish_when_heuristic_fails(self, tmp_path):
+        with patch.object(pt, "livephish_location", return_value=self.RESOLVED) as mock_lp:
+            out = pt.resolve_location("2026-07-22", self.LOC, "2761",
+                                      "garbage tag", {}, tmp_path / "c.json")
+        assert out == self.RESOLVED
+        mock_lp.assert_called_once_with("2026-07-22", "2761")
+
+    def test_livephish_result_failing_round_trip_is_unresolved(self, tmp_path):
+        with patch.object(pt, "livephish_location",
+                          return_value="Some Other Place, Elsewhere, CA"):
+            assert pt.resolve_location("2026-07-22", self.LOC, "2761",
+                                       None, {}, tmp_path / "c.json") is None
+
+    def test_livephish_miss_is_unresolved(self, tmp_path):
+        with patch.object(pt, "livephish_location", return_value=None):
+            assert pt.resolve_location("2026-07-22", self.LOC, "2761",
+                                       None, {}, tmp_path / "c.json") is None
+
+    def test_non_two_letter_ending_uses_livephish(self, tmp_path):
+        loc = "Drum.Logos.Fukuoka.Japan"
+        resolved = "Drum Logos, Fukuoka, Japan"
+        with patch.object(pt, "livephish_location", return_value=resolved):
+            out = pt.resolve_location("2000-06-14", loc, "123",
+                                      "2000/06/14 Fukuoka, Japan", {},
+                                      tmp_path / "c.json")
+        assert out == resolved
