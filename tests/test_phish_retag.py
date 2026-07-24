@@ -640,6 +640,26 @@ class TestMainLogic:
         assert pt.read_album(d / "s3.flac") == want
         assert pt.read_discnumber(d / "s3.flac") == "3"
 
+    def test_clean_multiset_unresolved_venue(self, audio_fixtures, tmp_path):
+        # Clean multi-set show (matching date, valid I/II markers, identical
+        # remainder) whose location text has no "City, ST" the heuristic can
+        # split out, and livephish is mocked to miss — resolution fails and
+        # the directory lands in the shared unresolved bucket. Garbage
+        # remainder deliberately mirrors the existing unresolved fixture d4
+        # ("Big Cypress New Years").
+        root = tmp_path / "col"
+        d = root / "Phish-1996-08-16.Some.Random.Field.[555]"
+        make_show_file(audio_fixtures, d, "s1.flac", album="1996/08/16 I Loop Fest Nonsense")
+        make_show_file(audio_fixtures, d, "s2.flac", album="1996/08/16 II Loop Fest Nonsense")
+        counts = self._run(root, tmp_path / "c.json", execute=True)
+        assert counts["unresolved"] == 1
+        assert counts["multiset_clean"] == 0
+        assert counts["updated"] == 0
+        assert pt.read_album(d / "s1.flac") == "1996/08/16 I Loop Fest Nonsense"
+        assert pt.read_album(d / "s2.flac") == "1996/08/16 II Loop Fest Nonsense"
+        assert pt.read_discnumber(d / "s1.flac") == ""
+        assert pt.read_discnumber(d / "s2.flac") == ""
+
     def test_multiset_anomaly_warning_lists_distinct_tags(self, audio_fixtures, tmp_path, capsys):
         root = tmp_path / "col"
         build_collection(audio_fixtures, root)

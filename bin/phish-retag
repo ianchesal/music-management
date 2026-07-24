@@ -418,6 +418,10 @@ def main_logic(path: Path, execute: bool, cache_path: Path) -> dict:
         if len(distinct) > 1:
             clean = classify_clean_multiset(distinct, date)
             if clean is None:
+                # A directory interrupted mid-write (some files already collapsed to the
+                # target album, others still marker-tagged) will land here as an anomaly
+                # on the next run rather than resuming — fail-safe, but surprising if you
+                # don't know why a previously-"clean" directory suddenly needs manual review.
                 counts["multiset_anomaly"] += 1
                 multiset_anomaly_dirs.append(entry.name)
                 print(f"  {yellow('MULTISET-ANOMALY')}  {entry.name} — skipped, distinct album tags:",
@@ -436,6 +440,9 @@ def main_logic(path: Path, execute: bool, cache_path: Path) -> dict:
                 continue
 
             target = target_album(date, resolved)
+            # Defensive: in practice this is never True here — a directory where every
+            # file's tag has already collapsed to the uniform target album would have
+            # only one distinct tag, routing through the single-tag branch above instead.
             all_correct = all(
                 albums[f] == target and read_discnumber(f) == str(clean[albums[f]])
                 for f in files if f in albums
