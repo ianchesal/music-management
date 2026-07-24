@@ -172,3 +172,47 @@ class TestCache:
         bad = tmp_path / "list.json"
         bad.write_text("[1, 2]")
         assert pt.load_cache(bad) == {}
+
+
+FIXTURE_HTML_SEARCH = """
+<html><body>
+<a href="/LP-2761.html"><img alt="07/22/26 Madison Square Garden, New York, NY " title="..."></a>
+<a href="/LP-2761.html">Phish</a>
+<a href="/LP-2762.html"><img alt="07/22/26 Madison Square Garden 4k, New York 4k, NY " title="..."></a>
+<a href="/LP-2762.html">Phish</a>
+<a href="/LP-9999.html"><img alt="07/22/26 Some Other Venue, Elsewhere, CA " title="..."></a>
+<a href="/LP-9999.html">Phish</a>
+</body></html>
+"""
+
+
+class TestLivephishLocation:
+    def test_returns_location_for_matching_id(self):
+        with patch.object(pt, "search_livephish", return_value=FIXTURE_HTML_SEARCH), \
+             patch.object(pt.time, "sleep") as mock_sleep:
+            loc = pt.livephish_location("2026-07-22", "2761")
+        assert loc == "Madison Square Garden, New York, NY"
+        mock_sleep.assert_called_once()
+
+    def test_jitter_delay_is_within_bounds(self):
+        with patch.object(pt, "search_livephish", return_value=FIXTURE_HTML_SEARCH), \
+             patch.object(pt.time, "sleep") as mock_sleep:
+            pt.livephish_location("2026-07-22", "2761")
+        (delay,), _ = mock_sleep.call_args
+        assert 0.5 <= delay <= 1.5
+
+    def test_no_matching_id_returns_none(self):
+        with patch.object(pt, "search_livephish", return_value=FIXTURE_HTML_SEARCH), \
+             patch.object(pt.time, "sleep"):
+            assert pt.livephish_location("2026-07-22", "1234") is None
+
+    def test_http_error_returns_none(self):
+        with patch.object(pt, "search_livephish", side_effect=Exception("boom")), \
+             patch.object(pt.time, "sleep") as mock_sleep:
+            assert pt.livephish_location("2026-07-22", "2761") is None
+        mock_sleep.assert_called_once()  # still polite after a failed request
+
+    def test_4k_variants_are_skipped(self):
+        with patch.object(pt, "search_livephish", return_value=FIXTURE_HTML_SEARCH), \
+             patch.object(pt.time, "sleep"):
+            assert pt.livephish_location("2026-07-22", "2762") is None

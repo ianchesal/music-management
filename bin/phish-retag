@@ -166,6 +166,54 @@ def save_cache(path: Path, cache: dict) -> None:
     tmp.replace(path)
 
 
+# ── livephish.com fallback ─────────────────────────────────────────────────────
+
+def search_livephish(date: str) -> str:
+    url = SEARCH_URL.format(date=date)
+    resp = requests.get(url, headers=HEADERS, timeout=10)
+    resp.raise_for_status()
+    return resp.text
+
+
+def parse_search_results(html: str) -> list:
+    soup = BeautifulSoup(html, "html.parser")
+    candidates = []
+    seen_ids = set()
+
+    for a in soup.find_all("a", href=re.compile(r"^/LP-(\d+)\.html$")):
+        img = a.find("img")
+        if img is None:
+            continue
+        alt = img.get("alt", "").strip()
+        if "4k" in alt.lower():
+            continue
+        release_id = re.search(r"/LP-(\d+)\.html", a["href"]).group(1)
+        if release_id in seen_ids:
+            continue
+        seen_ids.add(release_id)
+        location_raw = re.sub(r"^\d{1,2}/\d{1,2}/\d{2,4}\s*", "", alt).strip()
+        candidates.append((release_id, location_raw))
+
+    return candidates
+
+
+def livephish_location(date: str, release_id: str):
+    """Search livephish by date and return the location string for release_id,
+    or None. Sleeps a jittered 0.5-1.5s after every request."""
+    try:
+        html = search_livephish(date)
+    except Exception as e:
+        print(f"  {yellow('WARN')} {date}: livephish HTTP error — {e}", file=sys.stderr)
+        return None
+    finally:
+        time.sleep(random.uniform(0.5, 1.5))
+
+    for cand_id, location_raw in parse_search_results(html):
+        if cand_id == release_id:
+            return location_raw
+    return None
+
+
 def main():
     pass
 
