@@ -65,6 +65,30 @@ class TestDotNormalize:
         assert pt.dot_normalize("New.York.NY") == "New.York.NY"
 
 
+class TestParseDateToken:
+    def test_slash_separated(self):
+        assert pt.parse_date_token("1994/05/07 I Dallas, TX") == (1994, 5, 7)
+
+    def test_dash_separated(self):
+        assert pt.parse_date_token("1992-12-01 I Denison University") == (1992, 12, 1)
+
+    def test_non_zero_padded_day(self):
+        assert pt.parse_date_token("1996/12/6 I Las Vegas, NV") == (1996, 12, 6)
+
+    def test_no_leading_date_returns_none(self):
+        assert pt.parse_date_token("XL Center, Hartford, CT") is None
+
+    def test_empty_string_returns_none(self):
+        assert pt.parse_date_token("") is None
+
+    def test_none_returns_none(self):
+        assert pt.parse_date_token(None) is None
+
+    def test_date_must_be_followed_by_boundary(self):
+        # "19940507" glued to more digits isn't a recognizable date token.
+        assert pt.parse_date_token("19940507extra Dallas, TX") is None
+
+
 class TestSplitVenueCity:
     def test_simple_city(self):
         assert pt.split_venue_city(

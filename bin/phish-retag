@@ -97,6 +97,20 @@ def dot_normalize(s: str) -> str:
     return re.sub(r"\.{2,}", ".", s)
 
 
+# A leading date token: 'YYYY/MM/DD' or 'YYYY-MM-DD', non-zero-padded
+# month/day allowed ('1996/12/6'), must be followed by whitespace or end.
+DATE_TOKEN_RE = re.compile(r"^(\d{4})[/-](\d{1,2})[/-](\d{1,2})(?=\s|$)")
+
+
+def parse_date_token(tag):
+    """Return (year, month, day) as ints from a leading date token in tag,
+    or None if tag doesn't start with one."""
+    m = DATE_TOKEN_RE.match(tag or "")
+    if not m:
+        return None
+    return int(m.group(1)), int(m.group(2)), int(m.group(3))
+
+
 # ── Venue/city resolution ──────────────────────────────────────────────────────
 
 # Last "<segment>, XX" in a tag: the city candidate and its state/country code.
