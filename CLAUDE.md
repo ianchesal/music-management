@@ -15,17 +15,18 @@ This is a collection of music management tools for handling live show collection
 
 ### Phish Collection Tools (`bin/`)
 
-Three Python tools designed to work together as a pipeline when integrating a LivePhish torrent download with an existing collection:
+Three Python tools designed to work together as a pipeline when integrating a LivePhish torrent download with an existing collection, plus a standalone tag normalizer:
 
 - **`phish-rename`** — Queries livephish.com to rename show directories from any date-based format to `Phish-YYYY-MM-DD.Dot.Separated.Location.[LivePhishID]`. Requires `requests` and `beautifulsoup4`.
 - **`phish-compare`** — Read-only diagnostic: shows matched/unmatched shows, studio album cross-references, and undated items in both the existing collection and torrent.
 - **`phish-merge`** — Performs the actual merge in up to four phases: (1) rsync backup to NAS, (2) copy torrent-only shows, (3) replace matched shows with canonical torrent copies, (4) rename existing-only shows to torrent naming style. Supports `--dry-run` and `--phase N`.
+- **`phish-retag`** — Normalizes the album tag on every audio file in canonical show directories to `YYYY/MM/DD Venue, City, ST`, derived from the directory name. Venue/city boundaries resolve from existing tags when possible, falling back to livephish.com (jittered requests, results cached in `$XDG_CACHE_HOME/phish-retag.json`). Multi-set directories (more than one distinct album tag) are skipped with a warning. Only the album tag is touched. Requires `mutagen`.
 
-All three tools share the same date-extraction logic and default paths:
+All four tools share the same date-extraction logic, and the collection tools share these default paths:
 - `DEFAULT_EXISTING = /data/media/Sorted/Unsorted/Music/Phish`
 - `DEFAULT_TORRENT  = /data/torrents/Phish-Live.Phish.Project-2002-2026`
 
-Python deps: `pip install -r requirements.txt` (`requests`, `beautifulsoup4`).
+Python deps: `pip install -r requirements.txt` (`requests`, `beautifulsoup4`, `mutagen`).
 
 ### Sync Script Pattern
 All sync scripts follow a common pattern:
@@ -57,6 +58,11 @@ bin/phish-merge --execute --nas /mnt/nas/Phish-backup
 
 # Run only a specific phase
 bin/phish-merge --phase 4 --dry-run
+
+# Normalize album tags (dry run resolves + caches; --execute applies)
+bin/phish-retag
+bin/phish-retag --execute
+bin/phish-retag /some/other/collection --cache /tmp/cache.json
 ```
 
 ### Sync Scripts
@@ -108,11 +114,12 @@ bats music-sync.bats          # Integration tests (9 tests)
 bats --verbose-run *.bats     # Verbose output for debugging
 ```
 
-### Pytest Tests (Python bin/ tools — 65+ tests)
+### Pytest Tests (Python bin/ tools — 130+ tests)
 ```bash
 pytest tests/                        # Run all Python tests
 pytest tests/test_phish_rename.py    # Tests for phish-rename
 pytest tests/test_phish_merge.py     # Tests for phish-merge
+pytest tests/test_phish_retag.py     # Tests for phish-retag
 pytest -v tests/                     # Verbose output
 ```
 
@@ -129,8 +136,8 @@ cd tests && bats *.bats && cd .. && pytest tests/
 - Bats tests use custom helper functions in `tests/test_helper.bash`
 - Bats test configs use `TEST_TMP_DIR` paths so directories actually exist for validation
 - Use `assert_rsync_called_with` and `assert_file_exists` helpers for common bats assertions
-- Pytest tests load `bin/phish-rename` and `bin/phish-merge` as modules using `SourceFileLoader` (files have no `.py` extension)
-- When adding new phish-merge or phish-rename behavior, add pytest tests alongside; when adding sync-lib behavior, add bats tests
+- Pytest tests load `bin/phish-rename`, `bin/phish-merge`, and `bin/phish-retag` as modules using `SourceFileLoader` (files have no `.py` extension)
+- When adding new phish-merge, phish-rename, or phish-retag behavior, add pytest tests alongside; when adding sync-lib behavior, add bats tests
 
 ## Dependencies
 
@@ -139,7 +146,7 @@ Required external tools:
 - `rsync` — File synchronization
 - `jq` — JSON processing for metadata parsing
 - `ssh` — Remote server access for verification
-- `python3` with `requests` and `beautifulsoup4` — Required by `bin/` tools (`pip install -r requirements.txt`)
+- `python3` with `requests`, `beautifulsoup4`, and `mutagen` — Required by `bin/` tools (`pip install -r requirements.txt`)
 - `bats` — For running bats tests locally
 - `pyenv` — For managing Python version
 - `pytest` — For running Python tests locally
@@ -151,6 +158,7 @@ Required external tools:
   - `phish-rename` — Rename downloads to canonical LivePhish format
   - `phish-compare` — Compare existing collection vs torrent (read-only)
   - `phish-merge` — Merge torrent into existing collection
+  - `phish-retag` — Normalize album tags to YYYY/MM/DD Venue, City, ST
   - `borg-backup` — Incremental Borg backup: init, create, prune, compact
   - `borg-backup-test` — Smoke test helper using temp directories (safe to run anytime)
 - `sync/` — Music synchronization scripts and configurations

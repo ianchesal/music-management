@@ -1,0 +1,435 @@
+#!/usr/bin/env python3
+"""
+phish-retag — Normalize album tags on Phish show audio files.
+
+Scans PATH for canonical show directories
+(Phish-YYYY-MM-DD.Dot.Separated.Location.[LivePhishID]) and rewrites the
+album tag on every audio file to:
+  YYYY/MM/DD Venue, City, ST
+
+Only the album tag is touched. Multi-set directories (more than one distinct
+album tag) are skipped with a warning. Venue/city boundaries are resolved
+from existing tags when possible, falling back to livephish.com; results are
+cached so repeat runs make no network requests.
+
+Usage:
+  phish-retag [PATH]
+  phish-retag [PATH] --execute
+  phish-retag [PATH] --cache FILE
+
+Options:
+  PATH          Collection directory [default: /data/media/Sorted/Unsorted/Music/Phish]
+  --dry-run     Print planned changes, touch nothing [default]
+  --execute     Apply tag changes (default is dry run)
+  --cache FILE  Location cache [default: $XDG_CACHE_HOME/phish-retag.json]
+  -h, --help    Show this message
+"""
+
+import json
+import os
+import random
+import re
+import sys
+import time
+from pathlib import Path
+
+import mutagen
+import requests
+from bs4 import BeautifulSoup
+
+# ── Terminal ───────────────────────────────────────────────────────────────────
+
+USE_COLOR = sys.stdout.isatty()
+
+
+def _ansi(code, s):
+    return f"\033[{code}m{s}\033[0m" if USE_COLOR else s
+
+
+def bold(s):   return _ansi("1",  s)
+def dim(s):    return _ansi("2",  s)
+def yellow(s): return _ansi("93", s)
+def green(s):  return _ansi("92", s)
+
+
+# ── Constants ──────────────────────────────────────────────────────────────────
+
+DEFAULT_PATH = Path("/data/media/Sorted/Unsorted/Music/Phish")
+
+AUDIO_EXTS = {".flac", ".m4a", ".mp3"}
+
+SEARCH_URL = (
+    "https://www.livephish.com/on/demandware.store/"
+    "Sites-LivePhish-Site/default/Search-Show"
+    "?search-button=&q={date}&lang=default"
+)
+
+HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    )
+}
+
+SHOW_DIR_RE = re.compile(r"^Phish-(\d{4}-\d{2}-\d{2})\.(.+)\.\[(\d+)\]$")
+
+# ── Name parsing ───────────────────────────────────────────────────────────────
+
+def parse_show_dirname(dirname: str):
+    """Return (date, location_dots, release_id) for a canonical show dir, else None."""
+    m = SHOW_DIR_RE.match(dirname)
+    if not m:
+        return None
+    return m.group(1), m.group(2), m.group(3)
+
+
+def location_to_dots(location_str: str) -> str:
+    # Same transform phish-rename uses to build directory names.
+    name = location_str.strip()
+    name = name.replace(",", "")
+    name = re.sub(r"\s+", ".", name.strip())
+    return name.strip(".")
+
+
+def dot_normalize(s: str) -> str:
+    # "St. Louis" dots to "St..Louis" while directory names carry "St.Louis";
+    # collapse runs so the two compare equal.
+    return re.sub(r"\.{2,}", ".", s)
+
+
+# ── Venue/city resolution ──────────────────────────────────────────────────────
+
+# Last "<segment>, XX" in a tag: the city candidate and its state/country code.
+CITY_STATE_RE = re.compile(r"([^,]+),\s*([A-Z]{2})(?![A-Za-z])")
+
+
+def split_venue_city(location_dots: str, album_tag: str | None) -> str | None:
+    """Split a dot-separated location into "Venue, City, ST" using the City, ST
+    already present in an album tag. Returns None when the tag doesn't yield a
+    usable, verifiable split (caller falls back to livephish)."""
+    m = re.match(r"^(.+)\.([A-Z]{2})$", location_dots)
+    if not m:
+        return None
+    loc_head, state = m.group(1), m.group(2)
+
+    matches = CITY_STATE_RE.findall(album_tag or "")
+    if not matches:
+        return None
+    city_text, tag_state = matches[-1]
+    if tag_state != state:
+        return None
+
+    norm_head = dot_normalize(loc_head)
+    # The tag's city segment may carry prefix junk ("Phish - 2026_07_21 Syracuse").
+    # Try the longest word-suffix first so multi-word cities win over their own
+    # tails ("New York" must beat "York").
+    words = city_text.split()
+    for start in range(len(words)):
+        candidate = " ".join(words[start:]).strip()
+        city_dots = dot_normalize(location_to_dots(candidate))
+        if not city_dots:
+            continue
+        if norm_head == city_dots:
+            return None  # venue would be empty
+        if norm_head.endswith("." + city_dots):
+            venue = norm_head[: -(len(city_dots) + 1)].replace(".", " ")
+            return f"{venue}, {candidate}, {state}"
+    return None
+
+
+def round_trip_ok(resolved: str, location_dots: str) -> bool:
+    """Hard invariant: re-dotting the resolved location must reproduce the
+    directory's location string — that is exactly how dir names were built."""
+    return dot_normalize(location_to_dots(resolved)) == dot_normalize(location_dots)
+
+
+# ── Cache ──────────────────────────────────────────────────────────────────────
+
+def default_cache_path() -> Path:
+    base = os.environ.get("XDG_CACHE_HOME") or str(Path.home() / ".cache")
+    return Path(base) / "phish-retag.json"
+
+
+def load_cache(path: Path) -> dict:
+    try:
+        with open(path) as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def save_cache(path: Path, cache: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    with open(tmp, "w") as f:
+        json.dump(cache, f, indent=2, sort_keys=True)
+    tmp.replace(path)
+
+
+# ── livephish.com fallback ─────────────────────────────────────────────────────
+
+def search_livephish(date: str) -> str:
+    url = SEARCH_URL.format(date=date)
+    resp = requests.get(url, headers=HEADERS, timeout=10)
+    resp.raise_for_status()
+    return resp.text
+
+
+def parse_search_results(html: str) -> list:
+    soup = BeautifulSoup(html, "html.parser")
+    candidates = []
+    seen_ids = set()
+
+    for a in soup.find_all("a", href=re.compile(r"^/LP-(\d+)\.html$")):
+        img = a.find("img")
+        if img is None:
+            continue
+        alt = img.get("alt", "").strip()
+        if "4k" in alt.lower():
+            continue
+        release_id = re.search(r"/LP-(\d+)\.html", a["href"]).group(1)
+        if release_id in seen_ids:
+            continue
+        seen_ids.add(release_id)
+        location_raw = re.sub(r"^\d{1,2}/\d{1,2}/\d{2,4}\s*", "", alt).strip()
+        candidates.append((release_id, location_raw))
+
+    return candidates
+
+
+def livephish_location(date: str, release_id: str):
+    """Search livephish by date and return the location string for release_id,
+    or None. Sleeps a jittered 0.5-1.5s after every request."""
+    try:
+        html = search_livephish(date)
+    except Exception as e:
+        print(f"  {yellow('WARN')} {date}: livephish HTTP error — {e}", file=sys.stderr)
+        return None
+    finally:
+        time.sleep(random.uniform(0.5, 1.5))
+
+    for cand_id, location_raw in parse_search_results(html):
+        if cand_id == release_id:
+            return location_raw
+    return None
+
+
+def resolve_location(date: str, location_dots: str, release_id: str,
+                     album_tag: str | None, cache: dict, cache_path: Path) -> str | None:
+    """Resolve the comma-separated location for a show. Order: cache →
+    offline tag heuristic → livephish. Every result must pass the round-trip
+    invariant; failures return None (unresolved). Successes are persisted to
+    the cache immediately."""
+    cached = cache.get(release_id)
+    if cached is not None:
+        if round_trip_ok(cached, location_dots):
+            return cached
+        del cache[release_id]  # stale entry for this directory — re-resolve
+        save_cache(cache_path, cache)
+
+    resolved = split_venue_city(location_dots, album_tag)
+    if resolved is None:
+        resolved = livephish_location(date, release_id)
+
+    if resolved is None or not round_trip_ok(resolved, location_dots):
+        return None
+
+    cache[release_id] = resolved
+    save_cache(cache_path, cache)
+    return resolved
+
+
+def target_album(date: str, location: str) -> str:
+    return f"{date.replace('-', '/')} {location}"
+
+
+# ── Tag I/O ────────────────────────────────────────────────────────────────────
+
+def collect_audio(dir_path: Path) -> list:
+    return sorted(
+        p for p in dir_path.rglob("*")
+        if p.is_file() and p.suffix.lower() in AUDIO_EXTS
+    )
+
+
+def _open_audio(path: Path):
+    # easy=True exposes a uniform "album" key across FLAC/M4A/MP3.
+    try:
+        return mutagen.File(str(path), easy=True)
+    except Exception:
+        return None
+
+
+def read_album(path: Path):
+    """Album tag of an audio file: None if unreadable, "" if untagged."""
+    audio = _open_audio(path)
+    if audio is None:
+        return None
+    if audio.tags is None:
+        return ""
+    values = audio.get("album")
+    return values[0] if values else ""
+
+
+def write_album(path: Path, album: str) -> bool:
+    audio = _open_audio(path)
+    if audio is None:
+        return False
+    if audio.tags is None:
+        audio.add_tags()
+    audio["album"] = album
+    audio.save()
+    return True
+
+
+# ── Main logic ─────────────────────────────────────────────────────────────────
+
+def main_logic(path: Path, execute: bool, cache_path: Path) -> dict:
+    counts = {"updated": 0, "already": 0, "multiset": 0,
+              "unresolved": 0, "skipped": 0}
+    multiset_dirs = []
+    unresolved_dirs = []
+    files_updated = 0
+    cache = load_cache(cache_path)
+
+    entries = sorted(path.iterdir(), key=lambda e: e.name.lower())
+    for entry in entries:
+        if not entry.is_dir() or entry.name.startswith("."):
+            continue
+
+        parsed = parse_show_dirname(entry.name)
+        if parsed is None:
+            counts["skipped"] += 1
+            print(f"  {dim('SKIP')}      {entry.name} (not a canonical show dir)")
+            continue
+        date, location_dots, release_id = parsed
+
+        files = collect_audio(entry)
+        if not files:
+            counts["skipped"] += 1
+            print(f"  {dim('SKIP')}      {entry.name} (no audio files)")
+            continue
+
+        albums = {}
+        for f in files:
+            album = read_album(f)
+            if album is None:
+                print(f"  {yellow('WARN')} unreadable audio file: {f}", file=sys.stderr)
+                continue
+            albums[f] = album
+
+        distinct = sorted(set(albums.values()))
+        if len(distinct) > 1:
+            counts["multiset"] += 1
+            multiset_dirs.append(entry.name)
+            print(f"  {yellow('MULTISET')}  {entry.name} — skipped, distinct album tags:",
+                  file=sys.stderr)
+            for tag in distinct:
+                print(f"      {tag or '(no album tag)'}", file=sys.stderr)
+            continue
+
+        current = distinct[0] if distinct else ""
+        resolved = resolve_location(date, location_dots, release_id,
+                                    current or None, cache, cache_path)
+        if resolved is None:
+            counts["unresolved"] += 1
+            unresolved_dirs.append(entry.name)
+            print(f"  {yellow('UNRESOLVED')} {entry.name}", file=sys.stderr)
+            continue
+
+        target = target_album(date, resolved)
+        if current == target:
+            counts["already"] += 1
+            continue
+
+        counts["updated"] += 1
+        prefix = "[DRY RUN] " if not execute else ""
+        print(f"  {prefix}{entry.name}")
+        print(f"      {current or '(no album tag)'} → {green(target)}")
+        for f in files:
+            if f not in albums:
+                continue
+            if albums.get(f) == target:
+                continue
+            if execute:
+                if not write_album(f, target):
+                    print(f"  {yellow('WARN')} could not write tag: {f}", file=sys.stderr)
+                    continue
+            files_updated += 1
+
+    print()
+    print(f"  {bold('SUMMARY')}")
+    verb = "updated" if execute else "would update"
+    print(f"  {green(str(counts['updated']))}  shows {verb} ({files_updated} files)")
+    print(f"  {dim(str(counts['already']))}  already correct")
+    print(f"  {yellow(str(counts['multiset']))}  multi-set (skipped, fix manually)")
+    print(f"  {yellow(str(counts['unresolved']))}  unresolved")
+    print(f"  {dim(str(counts['skipped']))}  skipped (non-canonical or no audio)")
+    if multiset_dirs:
+        print(f"\n  {bold('MULTI-SET DIRECTORIES')} (manual assessment needed)")
+        for name in multiset_dirs:
+            print(f"      {name}")
+    if unresolved_dirs:
+        print(f"\n  {bold('UNRESOLVED DIRECTORIES')} (location could not be verified)")
+        for name in unresolved_dirs:
+            print(f"      {name}")
+    print()
+    return counts
+
+
+# ── Argument parsing ───────────────────────────────────────────────────────
+
+def parse_args(argv):
+    path = None
+    execute = False
+    cache_path = None
+
+    args = argv[1:]
+    i = 0
+    while i < len(args):
+        if args[i] in ("-h", "--help"):
+            print(__doc__)
+            sys.exit(0)
+        elif args[i] == "--execute":
+            execute = True
+            i += 1
+        elif args[i] == "--dry-run":
+            execute = False
+            i += 1
+        elif args[i] == "--cache":
+            if i + 1 >= len(args):
+                print("Error: --cache requires a file argument", file=sys.stderr)
+                sys.exit(1)
+            cache_path = Path(args[i + 1])
+            i += 2
+        elif not args[i].startswith("-"):
+            path = Path(args[i])
+            i += 1
+        else:
+            print(f"Unknown argument: {args[i]}", file=sys.stderr)
+            sys.exit(1)
+
+    if path is None:
+        path = DEFAULT_PATH
+    if cache_path is None:
+        cache_path = default_cache_path()
+
+    return path, execute, cache_path
+
+
+def main():
+    path, execute, cache_path = parse_args(sys.argv)
+    if not path.is_dir():
+        print(f"Error: PATH does not exist: {path}", file=sys.stderr)
+        sys.exit(1)
+    mode = "EXECUTE" if execute else "DRY RUN"
+    print(f"\n  {bold('PHISH RETAG')}  [{mode}]")
+    print(f"  {dim('Path:')}   {path}")
+    print(f"  {dim('Cache:')}  {cache_path}")
+    print()
+    main_logic(path, execute, cache_path)
+
+
+if __name__ == "__main__":
+    main()
