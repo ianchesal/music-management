@@ -111,6 +111,34 @@ def parse_date_token(tag):
     return int(m.group(1)), int(m.group(2)), int(m.group(3))
 
 
+def strip_date_token(tag):
+    """Return tag's text after its leading date token (leading whitespace
+    stripped), or None if tag doesn't start with one."""
+    m = DATE_TOKEN_RE.match(tag or "")
+    if not m:
+        return None
+    return tag[m.end():].lstrip()
+
+
+# Literal allow-list, not a general Roman-numeral parse: a general parse
+# would accept "XL" (= 40), which is the venue name in the real directory
+# Phish-2013-10-27.XL.Center.Hartford.CT.[804], not a set marker. A Phish
+# show having more than 5 sets is not a real scenario.
+SET_MARKER_TO_DISC = {"I": 1, "II": 2, "III": 3, "IV": 4, "V": 5}
+SET_MARKER_RE = re.compile(r"^(I|II|III|IV|V)(?=\s|$)")
+
+
+def match_set_marker(remainder):
+    """remainder is tag text with the leading date token already stripped
+    (see strip_date_token). Returns (disc_number, location_text) where
+    location_text is what follows the marker (leading whitespace stripped),
+    or None if remainder doesn't start with a recognized set marker."""
+    m = SET_MARKER_RE.match(remainder)
+    if not m:
+        return None
+    return SET_MARKER_TO_DISC[m.group(1)], remainder[m.end():].lstrip()
+
+
 # ── Venue/city resolution ──────────────────────────────────────────────────────
 
 # Last "<segment>, XX" in a tag: the city candidate and its state/country code.

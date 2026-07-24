@@ -89,6 +89,43 @@ class TestParseDateToken:
         assert pt.parse_date_token("19940507extra Dallas, TX") is None
 
 
+class TestStripDateToken:
+    def test_strips_date_and_leading_space(self):
+        assert pt.strip_date_token("1994/05/07 I Dallas, TX") == "I Dallas, TX"
+
+    def test_no_date_returns_none(self):
+        assert pt.strip_date_token("XL Center, Hartford, CT") is None
+
+
+class TestMatchSetMarker:
+    def test_marker_i(self):
+        assert pt.match_set_marker("I Providence, RI") == (1, "Providence, RI")
+
+    def test_marker_ii(self):
+        assert pt.match_set_marker("II Providence, RI") == (2, "Providence, RI")
+
+    def test_marker_iii(self):
+        assert pt.match_set_marker("III Rosemont, IL") == (3, "Rosemont, IL")
+
+    def test_marker_iv(self):
+        assert pt.match_set_marker("IV Super Ball IX, NY") == (4, "Super Ball IX, NY")
+
+    def test_marker_v(self):
+        assert pt.match_set_marker("V Something, ZZ") == (5, "Something, ZZ")
+
+    def test_xl_is_not_a_marker(self):
+        # "XL" is a technically-valid Roman numeral (40) but not in the
+        # allow-list — regression for the real XL Center Hartford directory.
+        assert pt.match_set_marker("XL Center, Hartford, CT") is None
+
+    def test_marker_must_be_whole_token(self):
+        # "III" glued to more letters isn't a marker.
+        assert pt.match_set_marker("IIIrd Anniversary, Boston, MA") is None
+
+    def test_no_marker_at_all(self):
+        assert pt.match_set_marker("Chicago, IL (soundcheck)") is None
+
+
 class TestSplitVenueCity:
     def test_simple_city(self):
         assert pt.split_venue_city(
