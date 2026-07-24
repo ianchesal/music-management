@@ -285,3 +285,84 @@ class TestResolveLocation:
                                       "2000/06/14 Fukuoka, Japan", {},
                                       tmp_path / "c.json")
         assert out == resolved
+
+
+# ── Audio fixtures ─────────────────────────────────────────────────────────────
+# mutagen can only edit existing containers, not create them; generate tiny
+# real files once per session with ffmpeg (a required repo dependency).
+
+@pytest.fixture(scope="session")
+def audio_fixtures(tmp_path_factory):
+    src = tmp_path_factory.mktemp("audio-fixtures")
+    paths = {}
+    for ext in ("flac", "m4a", "mp3"):
+        out = src / f"fixture.{ext}"
+        subprocess.run(
+            ["ffmpeg", "-y", "-v", "error", "-f", "lavfi",
+             "-i", "anullsrc=r=8000:cl=mono", "-t", "0.1", str(out)],
+            check=True, capture_output=True,
+        )
+        paths[ext] = out
+    return paths
+
+
+def make_show_file(fixtures, dest_dir, name, album=None):
+    dest = Path(dest_dir) / name
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy(fixtures[name.rsplit(".", 1)[1]], dest)
+    if album is not None:
+        audio = mutagen.File(str(dest), easy=True)
+        if audio.tags is None:
+            audio.add_tags()
+        audio["album"] = album
+        audio.save()
+    return dest
+
+
+class TestTagIO:
+    @pytest.mark.parametrize("ext", ["flac", "m4a", "mp3"])
+    def test_write_then_read_album(self, audio_fixtures, tmp_path, ext):
+        f = make_show_file(audio_fixtures, tmp_path, f"track.{ext}")
+        assert pt.write_album(f, "2026/07/22 Madison Square Garden, New York, NY") is True
+        assert pt.read_album(f) == "2026/07/22 Madison Square Garden, New York, NY"
+
+    @pytest.mark.parametrize("ext", ["flac", "m4a", "mp3"])
+    def test_missing_album_reads_empty_string(self, audio_fixtures, tmp_path, ext):
+        f = make_show_file(audio_fixtures, tmp_path, f"track.{ext}")
+        assert pt.read_album(f) == ""
+
+    def test_write_preserves_other_tags(self, audio_fixtures, tmp_path):
+        f = make_show_file(audio_fixtures, tmp_path, "track.flac")
+        audio = mutagen.File(str(f), easy=True)
+        audio["title"] = "Tweezer"
+        audio["artist"] = "Phish"
+        audio["tracknumber"] = "5"
+        audio.save()
+        pt.write_album(f, "New Album")
+        audio = mutagen.File(str(f), easy=True)
+        assert audio["title"] == ["Tweezer"]
+        assert audio["artist"] == ["Phish"]
+        assert audio["tracknumber"] == ["5"]
+        assert audio["album"] == ["New Album"]
+
+    def test_unreadable_file_returns_none(self, tmp_path):
+        junk = tmp_path / "junk.flac"
+        junk.write_bytes(b"not audio at all")
+        assert pt.read_album(junk) is None
+        assert pt.write_album(junk, "x") is False
+
+
+class TestCollectAudio:
+    def test_finds_audio_recursively_and_sorted(self, audio_fixtures, tmp_path):
+        make_show_file(audio_fixtures, tmp_path, "b.flac")
+        make_show_file(audio_fixtures, tmp_path, "a.mp3")
+        make_show_file(audio_fixtures, tmp_path / "disc2", "c.m4a")
+        (tmp_path / "folder.jpg").write_bytes(b"\xff")
+        (tmp_path / "notes.txt").write_text("setlist")
+        found = pt.collect_audio(tmp_path)
+        assert [p.name for p in found] == ["a.mp3", "b.flac", "c.m4a"]
+
+    def test_uppercase_extensions_are_found(self, audio_fixtures, tmp_path):
+        f = make_show_file(audio_fixtures, tmp_path, "track.flac")
+        f.rename(tmp_path / "TRACK.FLAC")
+        assert [p.name for p in pt.collect_audio(tmp_path)] == ["TRACK.FLAC"]
