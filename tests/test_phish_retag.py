@@ -564,8 +564,10 @@ class TestMainLogic:
         assert pt.read_discnumber(d3 / "s1.flac") == ""
         out = capsys.readouterr().out
         assert "2026/07/21 Empower Federal Credit Union Amphitheater at Lakeview, Syracuse, NY" in out
-        assert "Disc 1: 1994/12/29 I Providence, RI" in out
-        assert "Disc 2: 1994/12/29 II Providence, RI" in out
+        assert ("Disc 1: 1994/12/29 I Providence, RI → "
+                "1994/12/29 Providence Civic Center, Providence, RI") in out
+        assert ("Disc 2: 1994/12/29 II Providence, RI → "
+                "1994/12/29 Providence Civic Center, Providence, RI") in out
 
     def test_dry_run_warms_cache(self, audio_fixtures, tmp_path):
         root = tmp_path / "col"
@@ -612,9 +614,31 @@ class TestMainLogic:
         f = d3 / "s1.flac"
         before = f.stat().st_mtime_ns
         counts = self._run(root, cache_file, execute=True)
+        # after execute, both files share one album tag with no discnumber
+        # mismatch, so this second run actually exercises the single-tag
+        # branch, not the multiset-clean branch directly — still valid
+        # end-to-end idempotency coverage.
         assert counts["already"] == 1
         assert counts["multiset_clean"] == 0
         assert f.stat().st_mtime_ns == before
+
+    def test_incomplete_tape_clean_multiset_no_disc_one(self, audio_fixtures, tmp_path):
+        # Regression test: a two-set show missing its first-set tape (no "I"
+        # tag present, only "II" and "III") still classifies as a clean
+        # multi-set show. main_logic must not assume disc 1 exists when
+        # picking the source tag for venue resolution — it must pick the
+        # lowest disc number actually present (here, 2).
+        root = tmp_path / "col"
+        d = root / "Phish-1994-12-01.Salem.Armory.Salem.OR.[360]"
+        make_show_file(audio_fixtures, d, "s2.flac", album="1994/12/01 II Salem, OR")
+        make_show_file(audio_fixtures, d, "s3.flac", album="1994/12/01 III Salem, OR")
+        counts = self._run(root, tmp_path / "c.json", execute=True)
+        assert counts["multiset_clean"] == 1
+        want = "1994/12/01 Salem Armory, Salem, OR"
+        assert pt.read_album(d / "s2.flac") == want
+        assert pt.read_discnumber(d / "s2.flac") == "2"
+        assert pt.read_album(d / "s3.flac") == want
+        assert pt.read_discnumber(d / "s3.flac") == "3"
 
     def test_multiset_anomaly_warning_lists_distinct_tags(self, audio_fixtures, tmp_path, capsys):
         root = tmp_path / "col"

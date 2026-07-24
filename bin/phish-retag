@@ -426,7 +426,7 @@ def main_logic(path: Path, execute: bool, cache_path: Path) -> dict:
                     print(f"      {tag or '(no album tag)'}", file=sys.stderr)
                 continue
 
-            source_tag = next(tag for tag, disc in clean.items() if disc == 1)
+            source_tag = min(clean, key=clean.get)
             resolved = resolve_location(date, location_dots, release_id,
                                         source_tag, cache, cache_path)
             if resolved is None:
