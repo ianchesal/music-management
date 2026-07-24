@@ -19,6 +19,7 @@ Usage:
 
 Options:
   PATH          Collection directory [default: /data/media/Sorted/Unsorted/Music/Phish]
+  --dry-run     Print planned changes, touch nothing [default]
   --execute     Apply tag changes (default is dry run)
   --cache FILE  Location cache [default: $XDG_CACHE_HOME/phish-retag.json]
   -h, --help    Show this message
@@ -102,7 +103,7 @@ def dot_normalize(s: str) -> str:
 CITY_STATE_RE = re.compile(r"([^,]+),\s*([A-Z]{2})(?![A-Za-z])")
 
 
-def split_venue_city(location_dots: str, album_tag):
+def split_venue_city(location_dots: str, album_tag: str | None) -> str | None:
     """Split a dot-separated location into "Venue, City, ST" using the City, ST
     already present in an album tag. Returns None when the tag doesn't yield a
     usable, verifiable split (caller falls back to livephish)."""
@@ -154,7 +155,7 @@ def load_cache(path: Path) -> dict:
         with open(path) as f:
             data = json.load(f)
         return data if isinstance(data, dict) else {}
-    except (OSError, json.JSONDecodeError):
+    except (OSError, ValueError):
         return {}
 
 
@@ -215,7 +216,7 @@ def livephish_location(date: str, release_id: str):
 
 
 def resolve_location(date: str, location_dots: str, release_id: str,
-                     album_tag, cache: dict, cache_path: Path):
+                     album_tag: str | None, cache: dict, cache_path: Path) -> str | None:
     """Resolve the comma-separated location for a show. Order: cache →
     offline tag heuristic → livephish. Every result must pass the round-trip
     invariant; failures return None (unresolved). Successes are persisted to
@@ -225,6 +226,7 @@ def resolve_location(date: str, location_dots: str, release_id: str,
         if round_trip_ok(cached, location_dots):
             return cached
         del cache[release_id]  # stale entry for this directory — re-resolve
+        save_cache(cache_path, cache)
 
     resolved = split_venue_city(location_dots, album_tag)
     if resolved is None:
@@ -346,6 +348,8 @@ def main_logic(path: Path, execute: bool, cache_path: Path) -> dict:
         print(f"  {prefix}{entry.name}")
         print(f"      {current or '(no album tag)'} → {green(target)}")
         for f in files:
+            if f not in albums:
+                continue
             if albums.get(f) == target:
                 continue
             if execute:

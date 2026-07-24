@@ -4,7 +4,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 import mutagen
 import pytest
@@ -171,6 +171,11 @@ class TestCache:
     def test_non_dict_json_returns_empty(self, tmp_path):
         bad = tmp_path / "list.json"
         bad.write_text("[1, 2]")
+        assert pt.load_cache(bad) == {}
+
+    def test_binary_garbage_file_returns_empty(self, tmp_path):
+        bad = tmp_path / "bin.json"
+        bad.write_bytes(b"\xff\xfe\x00garbage")
         assert pt.load_cache(bad) == {}
 
 
