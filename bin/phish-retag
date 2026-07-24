@@ -142,6 +142,30 @@ def round_trip_ok(resolved: str, location_dots: str) -> bool:
     return dot_normalize(location_to_dots(resolved)) == dot_normalize(location_dots)
 
 
+# ── Cache ──────────────────────────────────────────────────────────────────────
+
+def default_cache_path() -> Path:
+    base = os.environ.get("XDG_CACHE_HOME") or str(Path.home() / ".cache")
+    return Path(base) / "phish-retag.json"
+
+
+def load_cache(path: Path) -> dict:
+    try:
+        with open(path) as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def save_cache(path: Path, cache: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    with open(tmp, "w") as f:
+        json.dump(cache, f, indent=2, sort_keys=True)
+    tmp.replace(path)
+
+
 def main():
     pass
 

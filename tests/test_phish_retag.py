@@ -144,3 +144,31 @@ class TestRoundTripOk:
         assert pt.round_trip_ok(
             "Hampton Coliseum, Hampton, VA", "Madison.Square.Garden.New.York.NY"
         ) is False
+
+
+class TestCache:
+    def test_default_path_honors_xdg_cache_home(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+        assert pt.default_cache_path() == tmp_path / "phish-retag.json"
+
+    def test_default_path_falls_back_to_home_cache(self, monkeypatch):
+        monkeypatch.delenv("XDG_CACHE_HOME", raising=False)
+        assert pt.default_cache_path() == Path.home() / ".cache" / "phish-retag.json"
+
+    def test_round_trip(self, tmp_path):
+        cache_file = tmp_path / "sub" / "cache.json"
+        pt.save_cache(cache_file, {"2761": "Madison Square Garden, New York, NY"})
+        assert pt.load_cache(cache_file) == {"2761": "Madison Square Garden, New York, NY"}
+
+    def test_missing_file_returns_empty(self, tmp_path):
+        assert pt.load_cache(tmp_path / "nope.json") == {}
+
+    def test_corrupt_file_returns_empty(self, tmp_path):
+        bad = tmp_path / "bad.json"
+        bad.write_text("{not json")
+        assert pt.load_cache(bad) == {}
+
+    def test_non_dict_json_returns_empty(self, tmp_path):
+        bad = tmp_path / "list.json"
+        bad.write_text("[1, 2]")
+        assert pt.load_cache(bad) == {}
