@@ -8,7 +8,7 @@ A collection of command-line tools for managing music collections, specifically 
 - **Multi-Destination Sync**: Backup to NAS and sync filtered content to Plex server
 - **Configuration-Driven**: Portable setup using environment configs rather than hard-coded paths
 - **Artist-Specific Rules**: Per-artist exclude lists for studio album filtering
-- **Phish Collection Tools**: Dedicated Python tools for comparing, renaming, and merging Phish live show collections
+- **Phish Collection Tools**: Dedicated Python tools for comparing, renaming, merging, and tag-normalizing Phish live show collections
 - **Audio Processing**: FLAC to ALAC conversion with metadata correction
 - **Comprehensive Testing**: Full test suite with GitHub Actions CI/CD
 
@@ -62,6 +62,7 @@ Python tools for working with Phish live show collections alongside a LivePhish 
 - **`phish-rename`** — Rename downloaded show directories to canonical LivePhish format by looking up each show on livephish.com. Produces names like `Phish-YYYY-MM-DD.Dot.Separated.Location.[LivePhishID]`.
 - **`phish-compare`** — Compare an existing Phish collection against a torrent download. Reports matched shows, unique shows on each side, studio album cross-references, and undated items.
 - **`phish-merge`** — Merge an existing Phish live show collection with a torrent download. Runs four phases: NAS backup, copy new shows, replace matched shows with canonical torrent copies, rename existing-only shows to torrent naming style.
+- **`phish-retag`** — Normalize the album tag on every audio file in canonical show directories to `YYYY/MM/DD Venue, City, ST`, derived from the directory name. Resolves venue/city boundaries from existing tags when possible, falling back to livephish.com (results cached). Clean multi-set shows — directories whose distinct album tags differ only by a set marker (`I`–`V`) right after the date, e.g. `1994/05/07 I Dallas, TX` / `...II...` — get the marker converted to a `discnumber` tag and the album collapsed to the uniform format. Messier multi-set directories (contamination from another show, missing markers, disagreeing venue text) are skipped with a warning for manual review.
 
 **Typical workflow:**
 
@@ -76,6 +77,10 @@ bin/phish-compare
 # Step 3: Merge the torrent into your collection
 bin/phish-merge --dry-run
 bin/phish-merge --execute --nas /mnt/nas/Phish-backup
+
+# Step 4 (optional): Normalize album/disc tags across your collection
+bin/phish-retag --dry-run
+bin/phish-retag --execute
 ```
 
 **`phish-rename` options:**
@@ -94,6 +99,11 @@ phish-merge [--dry-run | --execute --nas PATH]
 phish-merge --existing PATH --torrent PATH --execute --nas PATH
 phish-merge --phase N [--dry-run | --execute --nas PATH]
   Phases: 1=backup  2=copy-new  3=replace  4=rename
+```
+
+**`phish-retag` options:**
+```
+phish-retag [PATH] [--cache FILE] [--dry-run | --execute]
 ```
 
 ### Music Sync Scripts (`sync/`)
@@ -204,9 +214,10 @@ bats --filter "load_global_config" sync-lib.bats
 
 **Pytest tests** (Python bin/ tools):
 ```bash
-pytest tests/                     # Run all Python tests (65+ tests)
+pytest tests/                     # Run all Python tests (190+ tests)
 pytest tests/test_phish_rename.py # Tests for phish-rename
 pytest tests/test_phish_merge.py  # Tests for phish-merge
+pytest tests/test_phish_retag.py  # Tests for phish-retag
 pytest -v tests/                  # Verbose output
 ```
 
@@ -322,7 +333,8 @@ GitHub Actions automatically run on pull requests:
 bin/                             # Phish collection Python tools
 ├── phish-rename                # Rename downloads to canonical LivePhish format
 ├── phish-compare               # Compare existing collection vs torrent
-└── phish-merge                 # Merge torrent into existing collection
+├── phish-merge                 # Merge torrent into existing collection
+└── phish-retag                 # Normalize album/disc tags on canonical show dirs
 
 sync/
 ├── config/                    # Configuration files
@@ -335,7 +347,7 @@ sync/
 
 tests/                        # Test suite
 ├── *.bats                   # Bats tests for sync scripts (28 tests)
-├── test_phish_*.py          # Pytest tests for bin/ tools (65+ tests)
+├── test_phish_*.py          # Pytest tests for bin/ tools (190+ tests)
 ├── test_helper.bash         # Bats test utilities
 └── README.md                # Testing documentation
 
@@ -356,7 +368,7 @@ systemd/
 - **ffmpeg** and **ffprobe** (for audio processing functions)
 - **jq** (for JSON metadata parsing)
 - **zsh** (for audio processing functions)
-- **python3** with `requests` and `beautifulsoup4` (for bin/ tools — see `requirements.txt`)
+- **python3** with `requests`, `beautifulsoup4`, and `mutagen` (for bin/ tools — see `requirements.txt`)
 - **bats** (for running bats tests locally)
 - **pytest** (for running Python tests locally)
 - **borg** 1.2+ (for music library backup — `sudo apt-get install borgbackup`)
