@@ -46,6 +46,9 @@ class TestDateFromDirname:
     def test_yyyy_underscore_mm_dd(self):
         assert pr.date_from_dirname("2024_07_20 Xfinity Center Mansfield MA") == "2024-07-20"
 
+    def test_yyyy_dot_mm_dd(self):
+        assert pr.date_from_dirname("2024.07.20 Xfinity Center Mansfield MA") == "2024-07-20"
+
     def test_single_digit_month(self):
         assert pr.date_from_dirname("1994_6_19 Somewhere") == "1994-06-19"
 

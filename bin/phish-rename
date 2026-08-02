@@ -2,7 +2,7 @@
 """
 phish-rename — Rename new Phish live show downloads to canonical LivePhish format.
 
-Scans PATH for directories matching YYYY-MM-DD or YYYY_MM_DD naming patterns,
+Scans PATH for directories matching YYYY-MM-DD, YYYY_MM_DD, or YYYY.MM.DD naming patterns,
 looks up each show on livephish.com, and renames to:
   Phish-YYYY-MM-DD.Dot.Separated.Location.[LivePhishID]
 
@@ -65,7 +65,7 @@ HEADERS = {
 # ── Core functions ─────────────────────────────────────────────────────────────
 
 def date_from_dirname(dirname: str):
-    m = re.match(r'^(\d{4})[-_](\d{1,2})[-_](\d{1,2})\b', dirname)
+    m = re.match(r'^(\d{4})[-_.](\d{1,2})[-_.](\d{1,2})\b', dirname)
     if m:
         y, mo, d = m.group(1), int(m.group(2)), int(m.group(3))
         return f"{y}-{mo:02d}-{d:02d}"
