@@ -145,6 +145,21 @@ class TestRoundTripOk:
             "Hampton Coliseum, Hampton, VA", "Madison.Square.Garden.New.York.NY"
         ) is False
 
+    def test_dicks_apostrophe_quirk_round_trips(self):
+        # livephish's official name carries an apostrophe; this collection's
+        # directory names strip it. One-off exception, not a real mismatch.
+        assert pt.round_trip_ok(
+            "Dick's Sporting Goods Park, Commerce City, CO",
+            "Dicks.Sporting.Goods.Park.Commerce.City.CO",
+        ) is True
+
+    def test_other_apostrophes_are_not_silently_stripped(self):
+        # The quirk list is a literal one-off, not a general apostrophe
+        # stripper — an unrelated apostrophe mismatch should still fail.
+        assert pt.round_trip_ok(
+            "Bill's Bar, Boston, MA", "Bills.Bar.Boston.MA"
+        ) is False
+
 
 class TestCache:
     def test_default_path_honors_xdg_cache_home(self, monkeypatch, tmp_path):

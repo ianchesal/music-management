@@ -137,10 +137,21 @@ def split_venue_city(location_dots: str, album_tag: str | None) -> str | None:
     return None
 
 
+# One-off: livephish's official name for this venue carries an apostrophe
+# ("Dick's Sporting Goods Park") that this collection's directory names
+# strip ("Dicks.Sporting.Goods.Park..."). Comparison-only — the apostrophe
+# is kept in the tag text actually written, this just isn't a real
+# location mismatch worth landing in the unresolved bucket over.
+ROUND_TRIP_QUIRKS = {"Dick's": "Dicks"}
+
+
 def round_trip_ok(resolved: str, location_dots: str) -> bool:
     """Hard invariant: re-dotting the resolved location must reproduce the
     directory's location string — that is exactly how dir names were built."""
-    return dot_normalize(location_to_dots(resolved)) == dot_normalize(location_dots)
+    comparable = resolved
+    for quirky, plain in ROUND_TRIP_QUIRKS.items():
+        comparable = comparable.replace(quirky, plain)
+    return dot_normalize(location_to_dots(comparable)) == dot_normalize(location_dots)
 
 
 # ── Cache ──────────────────────────────────────────────────────────────────────
