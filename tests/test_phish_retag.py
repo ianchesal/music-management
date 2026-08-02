@@ -445,15 +445,18 @@ def audio_fixtures(tmp_path_factory):
     return paths
 
 
-def make_show_file(fixtures, dest_dir, name, album=None):
+def make_show_file(fixtures, dest_dir, name, album=None, date=None):
     dest = Path(dest_dir) / name
     dest.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy(fixtures[name.rsplit(".", 1)[1]], dest)
-    if album is not None:
+    if album is not None or date is not None:
         audio = mutagen.File(str(dest), easy=True)
         if audio.tags is None:
             audio.add_tags()
-        audio["album"] = album
+        if album is not None:
+            audio["album"] = album
+        if date is not None:
+            audio["date"] = date
         audio.save()
     return dest
 
@@ -514,6 +517,30 @@ class TestTagIO:
         assert pt.read_discnumber(junk) is None
         assert pt.write_discnumber(junk, "1") is False
 
+    @pytest.mark.parametrize("ext", ["flac", "m4a", "mp3"])
+    def test_write_then_read_date(self, audio_fixtures, tmp_path, ext):
+        f = make_show_file(audio_fixtures, tmp_path, f"track.{ext}")
+        assert pt.write_date(f, "1996-12-06") is True
+        assert pt.read_date(f) == "1996-12-06"
+
+    @pytest.mark.parametrize("ext", ["flac", "m4a", "mp3"])
+    def test_missing_date_reads_empty_string(self, audio_fixtures, tmp_path, ext):
+        f = make_show_file(audio_fixtures, tmp_path, f"track.{ext}")
+        assert pt.read_date(f) == ""
+
+    def test_date_write_preserves_album(self, audio_fixtures, tmp_path):
+        f = make_show_file(audio_fixtures, tmp_path, "track.flac",
+                           album="1994/05/07 Dallas, TX")
+        pt.write_date(f, "1994-05-07")
+        assert pt.read_album(f) == "1994/05/07 Dallas, TX"
+        assert pt.read_date(f) == "1994-05-07"
+
+    def test_unreadable_file_date_returns_none(self, tmp_path):
+        junk = tmp_path / "junk.flac"
+        junk.write_bytes(b"not audio at all")
+        assert pt.read_date(junk) is None
+        assert pt.write_date(junk, "1996-12-06") is False
+
 
 class TestCollectAudio:
     def test_finds_audio_recursively_and_sorted(self, audio_fixtures, tmp_path):
@@ -542,7 +569,8 @@ def build_collection(audio_fixtures, root):
     # Already correct
     d2 = root / "Phish-2026-07-12.Ruoff.Music.Center.Noblesville.IN.[2754]"
     make_show_file(audio_fixtures, d2, "t1.flac",
-                   album="2026/07/12 Ruoff Music Center, Noblesville, IN")
+                   album="2026/07/12 Ruoff Music Center, Noblesville, IN",
+                   date="2026-07-12")
     # Clean multi-set: two distinct tags differing only by set marker
     d3 = root / "Phish-1994-12-29.Providence.Civic.Center.Providence.RI.[498]"
     make_show_file(audio_fixtures, d3, "s1.flac", album="1994/12/29 I Providence, RI")
@@ -698,6 +726,65 @@ class TestMainLogic:
         counts = self._run(root, tmp_path / "c.json", execute=False)
         assert counts == {"updated": 0, "already": 0, "multiset_clean": 0,
                           "multiset_anomaly": 0, "unresolved": 0, "skipped": 1}
+
+
+class TestDateNormalization:
+    def _run(self, root, cache_file, execute):
+        with patch.object(pt, "livephish_location", return_value=None):
+            return pt.main_logic(root, execute=execute, cache_path=cache_file)
+
+    def test_wrong_date_triggers_update_even_when_album_correct(self, audio_fixtures, tmp_path):
+        root = tmp_path / "col"
+        d = root / "Phish-2026-07-12.Ruoff.Music.Center.Noblesville.IN.[2754]"
+        make_show_file(audio_fixtures, d, "t1.flac",
+                       album="2026/07/12 Ruoff Music Center, Noblesville, IN",
+                       date="2026-07-11")
+        counts = self._run(root, tmp_path / "c.json", execute=True)
+        assert counts["updated"] == 1
+        assert counts["already"] == 0
+        assert pt.read_album(d / "t1.flac") == "2026/07/12 Ruoff Music Center, Noblesville, IN"
+        assert pt.read_date(d / "t1.flac") == "2026-07-12"
+
+    def test_missing_date_is_set_alongside_album_fix(self, audio_fixtures, tmp_path):
+        root = tmp_path / "col"
+        d1, d2, *_ = build_collection(audio_fixtures, root)
+        self._run(root, tmp_path / "c.json", execute=True)
+        assert pt.read_date(d1 / "t1.flac") == "2026-07-21"
+        assert pt.read_date(d1 / "t2.flac") == "2026-07-21"
+
+    def test_clean_multiset_gets_date_set_on_every_file(self, audio_fixtures, tmp_path):
+        root = tmp_path / "col"
+        _, _, d3, *_ = build_collection(audio_fixtures, root)
+        self._run(root, tmp_path / "c.json", execute=True)
+        assert pt.read_date(d3 / "s1.flac") == "1994-12-29"
+        assert pt.read_date(d3 / "s2.flac") == "1994-12-29"
+
+    def test_unresolved_and_anomaly_dirs_leave_date_untouched(self, audio_fixtures, tmp_path):
+        root = tmp_path / "col"
+        _, _, _, d4, _, d6 = build_collection(audio_fixtures, root)
+        self._run(root, tmp_path / "c.json", execute=True)
+        assert pt.read_date(d4 / "t1.flac") == ""
+        assert pt.read_date(d6 / "s1.flac") == ""
+
+    def test_dry_run_does_not_write_date(self, audio_fixtures, tmp_path):
+        root = tmp_path / "col"
+        d = root / "Phish-2026-07-12.Ruoff.Music.Center.Noblesville.IN.[2754]"
+        make_show_file(audio_fixtures, d, "t1.flac",
+                       album="2026/07/12 Ruoff Music Center, Noblesville, IN",
+                       date="2026-07-11")
+        counts = self._run(root, tmp_path / "c.json", execute=False)
+        assert counts["updated"] == 1
+        assert pt.read_date(d / "t1.flac") == "2026-07-11"
+
+    def test_dry_run_prints_date_diff(self, audio_fixtures, tmp_path, capsys):
+        root = tmp_path / "col"
+        d = root / "Phish-2026-07-12.Ruoff.Music.Center.Noblesville.IN.[2754]"
+        make_show_file(audio_fixtures, d, "t1.flac",
+                       album="2026/07/12 Ruoff Music Center, Noblesville, IN",
+                       date="2026-07-11")
+        self._run(root, tmp_path / "c.json", execute=False)
+        out = capsys.readouterr().out
+        assert "2026-07-11 → 2026-07-12" in out
 
 
 class TestParseArgs:

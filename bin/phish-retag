@@ -7,7 +7,9 @@ Scans PATH for canonical show directories
 album tag on every audio file to:
   YYYY/MM/DD Venue, City, ST
 
-Only the album and discnumber tags are touched. A "clean" multi-set show —
+The date tag is also normalized to the show's date (YYYY-MM-DD).
+
+Only the album, discnumber, and date tags are touched. A "clean" multi-set show —
 one whose distinct album tags differ only by a set marker (I-V) right after
 the date, with matching venue/city text otherwise — has its set marker
 converted to a discnumber tag and its album collapsed to the same uniform
@@ -389,6 +391,28 @@ def write_discnumber(path: Path, discnumber: str) -> bool:
     return True
 
 
+def read_date(path: Path):
+    """Date tag of an audio file: None if unreadable, "" if untagged."""
+    audio = _open_audio(path)
+    if audio is None:
+        return None
+    if audio.tags is None:
+        return ""
+    values = audio.get("date")
+    return values[0] if values else ""
+
+
+def write_date(path: Path, date: str) -> bool:
+    audio = _open_audio(path)
+    if audio is None:
+        return False
+    if audio.tags is None:
+        audio.add_tags()
+    audio["date"] = date
+    audio.save()
+    return True
+
+
 # ── Main logic ─────────────────────────────────────────────────────────────────
 
 def main_logic(path: Path, execute: bool, cache_path: Path) -> dict:
@@ -451,11 +475,14 @@ def main_logic(path: Path, execute: bool, cache_path: Path) -> dict:
                 continue
 
             target = target_album(date, resolved)
-            # Defensive: in practice this is never True here — a directory where every
-            # file's tag has already collapsed to the uniform target album would have
-            # only one distinct tag, routing through the single-tag branch above instead.
+            dates = {f: read_date(f) for f in files if f in albums}
+            # Defensive: in practice all_correct is rarely True here — a directory
+            # where every file's tag had already collapsed to the uniform target
+            # album (and date) would have only one distinct tag, routing through
+            # the single-tag branch above instead.
             all_correct = all(
                 albums[f] == target and read_discnumber(f) == str(clean[albums[f]])
+                and dates.get(f) == date
                 for f in files if f in albums
             )
             if all_correct:
@@ -468,12 +495,15 @@ def main_logic(path: Path, execute: bool, cache_path: Path) -> dict:
             print(f"  {prefix}{entry.name}")
             for tag in sorted(clean, key=clean.get):
                 print(f"      Disc {clean[tag]}: {tag} → {green(target)}")
+            if any(dates.get(f) != date for f in files if f in albums):
+                print(f"      date → {green(date)}")
             for f in files:
                 if f not in albums:
                     continue
                 tag = albums[f]
                 disc_str = str(clean[tag])
-                if albums.get(f) == target and read_discnumber(f) == disc_str:
+                date_ok = dates.get(f) == date
+                if albums.get(f) == target and read_discnumber(f) == disc_str and date_ok:
                     continue
                 if execute:
                     if not write_album(f, target):
@@ -481,6 +511,9 @@ def main_logic(path: Path, execute: bool, cache_path: Path) -> dict:
                         continue
                     if not write_discnumber(f, disc_str):
                         print(f"  {yellow('WARN')} could not write discnumber: {f}", file=sys.stderr)
+                        continue
+                    if not date_ok and not write_date(f, date):
+                        print(f"  {yellow('WARN')} could not write date tag: {f}", file=sys.stderr)
                         continue
                 files_updated += 1
             continue
@@ -495,22 +528,34 @@ def main_logic(path: Path, execute: bool, cache_path: Path) -> dict:
             continue
 
         target = target_album(date, resolved)
-        if current == target:
+        dates = {f: read_date(f) for f in files if f in albums}
+        album_ok = current == target
+        dates_ok = all(d == date for d in dates.values())
+        if album_ok and dates_ok:
             counts["already"] += 1
             continue
 
         counts["updated"] += 1
         prefix = "[DRY RUN] " if not execute else ""
         print(f"  {prefix}{entry.name}")
-        print(f"      {current or '(no album tag)'} → {green(target)}")
+        if not album_ok:
+            print(f"      {current or '(no album tag)'} → {green(target)}")
+        if not dates_ok:
+            wrong = sorted({d or "(no date tag)" for d in dates.values() if d != date})
+            print(f"      {', '.join(wrong)} → {green(date)}")
         for f in files:
             if f not in albums:
                 continue
-            if albums.get(f) == target:
+            needs_album = albums.get(f) != target
+            needs_date = dates.get(f) != date
+            if not needs_album and not needs_date:
                 continue
             if execute:
-                if not write_album(f, target):
+                if needs_album and not write_album(f, target):
                     print(f"  {yellow('WARN')} could not write tag: {f}", file=sys.stderr)
+                    continue
+                if needs_date and not write_date(f, date):
+                    print(f"  {yellow('WARN')} could not write date tag: {f}", file=sys.stderr)
                     continue
             files_updated += 1
 
