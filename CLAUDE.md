@@ -20,7 +20,7 @@ Three Python tools designed to work together as a pipeline when integrating a Li
 - **`phish-rename`** — Queries livephish.com to rename show directories from any date-based format to `Phish-YYYY-MM-DD.Dot.Separated.Location.[LivePhishID]`. Requires `requests` and `beautifulsoup4`.
 - **`phish-compare`** — Read-only diagnostic: shows matched/unmatched shows, studio album cross-references, and undated items in both the existing collection and torrent.
 - **`phish-merge`** — Performs the actual merge in up to four phases: (1) rsync backup to NAS, (2) copy torrent-only shows, (3) replace matched shows with canonical torrent copies, (4) rename existing-only shows to torrent naming style. Supports `--dry-run` and `--phase N`.
-- **`phish-retag`** — Normalizes the album tag on every audio file in canonical show directories to `YYYY/MM/DD Venue, City, ST`, derived from the directory name. Venue/city boundaries resolve from existing tags when possible, falling back to livephish.com (jittered requests, results cached in `$XDG_CACHE_HOME/phish-retag.json`). Clean multi-set directories — distinct album tags differing only by a set marker (`I`-`V`) right after the date, with otherwise-matching venue text — get the marker converted to a `discnumber` tag and the album collapsed to the uniform format. Messier multi-set directories (contamination, missing markers, disagreeing venue text) are skipped with a warning. Only the album and discnumber tags are touched. Requires `mutagen`.
+- **`phish-retag`** — Normalizes the album tag on every audio file in canonical show directories to `YYYY/MM/DD Venue, City, ST`, derived from the directory name, and normalizes the date tag to the show's date (`YYYY-MM-DD`). Venue/city boundaries resolve from existing tags when possible, falling back to livephish.com (jittered requests, results cached in `$XDG_CACHE_HOME/phish-retag.json`). Clean multi-set directories — distinct album tags differing only by a set marker (`I`-`V`) right after the date, with otherwise-matching venue text — get the marker converted to a `discnumber` tag and the album collapsed to the uniform format. Messier multi-set directories (contamination, missing markers, disagreeing venue text) are skipped with a warning. Only the album, discnumber, and date tags are touched. Requires `mutagen`.
 
 All four tools share the same date-extraction logic, and the collection tools share these default paths:
 - `DEFAULT_EXISTING = /data/media/Sorted/Unsorted/Music/Phish`
@@ -158,7 +158,7 @@ Required external tools:
   - `phish-rename` — Rename downloads to canonical LivePhish format
   - `phish-compare` — Compare existing collection vs torrent (read-only)
   - `phish-merge` — Merge torrent into existing collection
-  - `phish-retag` — Normalize album tags to YYYY/MM/DD Venue, City, ST
+  - `phish-retag` — Normalize album tags to YYYY/MM/DD Venue, City, ST and date tags to YYYY-MM-DD
   - `borg-backup` — Incremental Borg backup: init, create, prune, compact
   - `borg-backup-test` — Smoke test helper using temp directories (safe to run anytime)
 - `sync/` — Music synchronization scripts and configurations
