@@ -65,6 +65,125 @@ class TestDotNormalize:
         assert pt.dot_normalize("New.York.NY") == "New.York.NY"
 
 
+class TestParseDateToken:
+    def test_slash_separated(self):
+        assert pt.parse_date_token("1994/05/07 I Dallas, TX") == (1994, 5, 7)
+
+    def test_dash_separated(self):
+        assert pt.parse_date_token("1992-12-01 I Denison University") == (1992, 12, 1)
+
+    def test_non_zero_padded_day(self):
+        assert pt.parse_date_token("1996/12/6 I Las Vegas, NV") == (1996, 12, 6)
+
+    def test_no_leading_date_returns_none(self):
+        assert pt.parse_date_token("XL Center, Hartford, CT") is None
+
+    def test_empty_string_returns_none(self):
+        assert pt.parse_date_token("") is None
+
+    def test_none_returns_none(self):
+        assert pt.parse_date_token(None) is None
+
+    def test_date_must_be_followed_by_boundary(self):
+        # "19940507" glued to more digits isn't a recognizable date token.
+        assert pt.parse_date_token("19940507extra Dallas, TX") is None
+
+
+class TestStripDateToken:
+    def test_strips_date_and_leading_space(self):
+        assert pt.strip_date_token("1994/05/07 I Dallas, TX") == "I Dallas, TX"
+
+    def test_no_date_returns_none(self):
+        assert pt.strip_date_token("XL Center, Hartford, CT") is None
+
+
+class TestMatchSetMarker:
+    def test_marker_i(self):
+        assert pt.match_set_marker("I Providence, RI") == (1, "Providence, RI")
+
+    def test_marker_ii(self):
+        assert pt.match_set_marker("II Providence, RI") == (2, "Providence, RI")
+
+    def test_marker_iii(self):
+        assert pt.match_set_marker("III Rosemont, IL") == (3, "Rosemont, IL")
+
+    def test_marker_iv(self):
+        assert pt.match_set_marker("IV Super Ball IX, NY") == (4, "Super Ball IX, NY")
+
+    def test_marker_v(self):
+        assert pt.match_set_marker("V Something, ZZ") == (5, "Something, ZZ")
+
+    def test_xl_is_not_a_marker(self):
+        # "XL" is a technically-valid Roman numeral (40) but not in the
+        # allow-list — regression for the real XL Center Hartford directory.
+        assert pt.match_set_marker("XL Center, Hartford, CT") is None
+
+    def test_marker_must_be_whole_token(self):
+        # "III" glued to more letters isn't a marker.
+        assert pt.match_set_marker("IIIrd Anniversary, Boston, MA") is None
+
+    def test_no_marker_at_all(self):
+        assert pt.match_set_marker("Chicago, IL (soundcheck)") is None
+
+
+class TestClassifyCleanMultiset:
+    def test_two_set_show(self):
+        assert pt.classify_clean_multiset(
+            ["1994/05/07 I Dallas, TX", "1994/05/07 II Dallas, TX"],
+            "1994-05-07",
+        ) == {"1994/05/07 I Dallas, TX": 1, "1994/05/07 II Dallas, TX": 2}
+
+    def test_three_set_show(self):
+        assert pt.classify_clean_multiset(
+            ["1995/12/31 I New York, NY", "1995/12/31 II New York, NY",
+             "1995/12/31 III New York, NY"],
+            "1995-12-31",
+        ) == {"1995/12/31 I New York, NY": 1, "1995/12/31 II New York, NY": 2,
+              "1995/12/31 III New York, NY": 3}
+
+    def test_four_set_show(self):
+        # Real show: Super Ball IX, 2011-07-02, four sets.
+        tags = ["2011/07/02 I Super Ball IX, NY", "2011/07/02 II Super Ball IX, NY",
+                "2011/07/02 III Super Ball IX, NY", "2011/07/02 IV Super Ball IX, NY"]
+        result = pt.classify_clean_multiset(tags, "2011-07-02")
+        assert result == {tags[0]: 1, tags[1]: 2, tags[2]: 3, tags[3]: 4}
+
+    def test_non_zero_padded_date_still_matches(self):
+        assert pt.classify_clean_multiset(
+            ["1996/12/6 I Las Vegas, NV", "1996/12/6 II Las Vegas, NV"],
+            "1996-12-06",
+        ) == {"1996/12/6 I Las Vegas, NV": 1, "1996/12/6 II Las Vegas, NV": 2}
+
+    def test_mismatched_date_is_anomaly(self):
+        # Real contamination shape: a bonus track from a different show/date.
+        tags = ["1994/12/01 I Salem, OR", "1994/12/01 II Salem, OR",
+                "1994/11/12 II Kent, OH"]
+        assert pt.classify_clean_multiset(tags, "1994-12-01") is None
+
+    def test_missing_marker_is_anomaly(self):
+        # Soundcheck-style tag alongside otherwise-clean sets.
+        tags = ["1994/06/18 Chicago, IL (soundcheck)",
+                "1994/06/18 I Chicago, IL", "1994/06/18 II Chicago, IL"]
+        assert pt.classify_clean_multiset(tags, "1994-06-18") is None
+
+    def test_xl_center_style_tags_are_anomaly(self):
+        # Regression: two distinct tags on the real XL Center directory
+        # shape, neither a genuine set marker.
+        tags = ["2013/10/27 XL Center, Hartford, CT",
+                "2013/10/27 XL Center, Hartford, CT (soundcheck)"]
+        assert pt.classify_clean_multiset(tags, "2013-10-27") is None
+
+    def test_remainder_mismatch_is_anomaly(self):
+        # Valid markers on both, but they disagree on venue/city text.
+        tags = ["1994/05/07 I Dallas, TX", "1994/05/07 II Fort Worth, TX"]
+        assert pt.classify_clean_multiset(tags, "1994-05-07") is None
+
+    def test_casing_only_difference_with_no_marker_is_anomaly(self):
+        # Real data: two files differing only by tag casing, no set marker.
+        tags = ["2017/07/14 Chicago, IL", "2017/07/14 Chicago, Il"]
+        assert pt.classify_clean_multiset(tags, "2017-07-14") is None
+
+
 class TestSplitVenueCity:
     def test_simple_city(self):
         assert pt.split_venue_city(
@@ -356,6 +475,30 @@ class TestTagIO:
         assert pt.read_album(junk) is None
         assert pt.write_album(junk, "x") is False
 
+    @pytest.mark.parametrize("ext", ["flac", "m4a", "mp3"])
+    def test_write_then_read_discnumber(self, audio_fixtures, tmp_path, ext):
+        f = make_show_file(audio_fixtures, tmp_path, f"track.{ext}")
+        assert pt.write_discnumber(f, "2") is True
+        assert pt.read_discnumber(f) == "2"
+
+    @pytest.mark.parametrize("ext", ["flac", "m4a", "mp3"])
+    def test_missing_discnumber_reads_empty_string(self, audio_fixtures, tmp_path, ext):
+        f = make_show_file(audio_fixtures, tmp_path, f"track.{ext}")
+        assert pt.read_discnumber(f) == ""
+
+    def test_discnumber_write_preserves_album(self, audio_fixtures, tmp_path):
+        f = make_show_file(audio_fixtures, tmp_path, "track.flac",
+                           album="1994/05/07 Dallas, TX")
+        pt.write_discnumber(f, "1")
+        assert pt.read_album(f) == "1994/05/07 Dallas, TX"
+        assert pt.read_discnumber(f) == "1"
+
+    def test_unreadable_file_discnumber_returns_none(self, tmp_path):
+        junk = tmp_path / "junk.flac"
+        junk.write_bytes(b"not audio at all")
+        assert pt.read_discnumber(junk) is None
+        assert pt.write_discnumber(junk, "1") is False
+
 
 class TestCollectAudio:
     def test_finds_audio_recursively_and_sorted(self, audio_fixtures, tmp_path):
@@ -385,7 +528,7 @@ def build_collection(audio_fixtures, root):
     d2 = root / "Phish-2026-07-12.Ruoff.Music.Center.Noblesville.IN.[2754]"
     make_show_file(audio_fixtures, d2, "t1.flac",
                    album="2026/07/12 Ruoff Music Center, Noblesville, IN")
-    # Multi-set: two distinct tags
+    # Clean multi-set: two distinct tags differing only by set marker
     d3 = root / "Phish-1994-12-29.Providence.Civic.Center.Providence.RI.[498]"
     make_show_file(audio_fixtures, d3, "s1.flac", album="1994/12/29 I Providence, RI")
     make_show_file(audio_fixtures, d3, "s2.flac", album="1994/12/29 II Providence, RI")
@@ -395,7 +538,13 @@ def build_collection(audio_fixtures, root):
     # Non-canonical: skipped
     d5 = root / "Live Bait Vol. 09"
     make_show_file(audio_fixtures, d5, "t1.flac", album="Live Bait Vol. 09")
-    return d1, d2, d3, d4, d5
+    # Multi-set anomaly: real contamination shape — a track internally
+    # tagged with a different date/venue mixed into an otherwise-clean pair.
+    d6 = root / "Phish-1994-12-01.Salem.Armory.Salem.OR.[359]"
+    make_show_file(audio_fixtures, d6, "s1.flac", album="1994/12/01 I Salem, OR")
+    make_show_file(audio_fixtures, d6, "s2.flac", album="1994/12/01 II Salem, OR")
+    make_show_file(audio_fixtures, d6, "bonus.flac", album="1994/11/12 II Kent, OH")
+    return d1, d2, d3, d4, d5, d6
 
 
 class TestMainLogic:
@@ -405,14 +554,20 @@ class TestMainLogic:
 
     def test_dry_run_reports_but_does_not_write(self, audio_fixtures, tmp_path, capsys):
         root = tmp_path / "col"
-        d1, *_ = build_collection(audio_fixtures, root)
+        d1, _, d3, *_ = build_collection(audio_fixtures, root)
         counts = self._run(root, tmp_path / "c.json", execute=False)
-        assert counts == {"updated": 1, "already": 1, "multiset": 1,
-                          "unresolved": 1, "skipped": 1}
+        assert counts == {"updated": 2, "already": 1, "multiset_clean": 1,
+                          "multiset_anomaly": 1, "unresolved": 1, "skipped": 1}
         # Tags untouched in dry run
         assert pt.read_album(d1 / "t1.flac") == "Phish - Phish - 2026_07_21 Syracuse, NY (Phis)"
+        assert pt.read_album(d3 / "s1.flac") == "1994/12/29 I Providence, RI"
+        assert pt.read_discnumber(d3 / "s1.flac") == ""
         out = capsys.readouterr().out
         assert "2026/07/21 Empower Federal Credit Union Amphitheater at Lakeview, Syracuse, NY" in out
+        assert ("Disc 1: 1994/12/29 I Providence, RI → "
+                "1994/12/29 Providence Civic Center, Providence, RI") in out
+        assert ("Disc 2: 1994/12/29 II Providence, RI → "
+                "1994/12/29 Providence Civic Center, Providence, RI") in out
 
     def test_dry_run_warms_cache(self, audio_fixtures, tmp_path):
         root = tmp_path / "col"
@@ -424,15 +579,22 @@ class TestMainLogic:
 
     def test_execute_writes_album_tags(self, audio_fixtures, tmp_path):
         root = tmp_path / "col"
-        d1, d2, d3, d4, d5 = build_collection(audio_fixtures, root)
+        d1, d2, d3, d4, d5, d6 = build_collection(audio_fixtures, root)
         self._run(root, tmp_path / "c.json", execute=True)
         want = "2026/07/21 Empower Federal Credit Union Amphitheater at Lakeview, Syracuse, NY"
         assert pt.read_album(d1 / "t1.flac") == want
         assert pt.read_album(d1 / "t2.flac") == want
-        # multiset, unresolved, and non-canonical dirs untouched
-        assert pt.read_album(d3 / "s1.flac") == "1994/12/29 I Providence, RI"
+        # clean multi-set: album collapsed, discnumber set per set
+        want_multiset = "1994/12/29 Providence Civic Center, Providence, RI"
+        assert pt.read_album(d3 / "s1.flac") == want_multiset
+        assert pt.read_discnumber(d3 / "s1.flac") == "1"
+        assert pt.read_album(d3 / "s2.flac") == want_multiset
+        assert pt.read_discnumber(d3 / "s2.flac") == "2"
+        # unresolved, non-canonical, and multi-set-anomaly dirs untouched
         assert pt.read_album(d4 / "t1.flac") == "Big Cypress New Years"
         assert pt.read_album(d5 / "t1.flac") == "Live Bait Vol. 09"
+        assert pt.read_album(d6 / "s1.flac") == "1994/12/01 I Salem, OR"
+        assert pt.read_album(d6 / "bonus.flac") == "1994/11/12 II Kent, OH"
 
     def test_already_correct_files_keep_mtime_on_execute(self, audio_fixtures, tmp_path):
         root = tmp_path / "col"
@@ -442,28 +604,85 @@ class TestMainLogic:
         self._run(root, tmp_path / "c.json", execute=True)
         assert f.stat().st_mtime_ns == before
 
-    def test_multiset_warning_lists_distinct_tags(self, audio_fixtures, tmp_path, capsys):
+    def test_multiset_clean_second_run_is_noop(self, audio_fixtures, tmp_path):
+        root = tmp_path / "col"
+        d3 = root / "Phish-1994-12-29.Providence.Civic.Center.Providence.RI.[498]"
+        make_show_file(audio_fixtures, d3, "s1.flac", album="1994/12/29 I Providence, RI")
+        make_show_file(audio_fixtures, d3, "s2.flac", album="1994/12/29 II Providence, RI")
+        cache_file = tmp_path / "c.json"
+        self._run(root, cache_file, execute=True)
+        f = d3 / "s1.flac"
+        before = f.stat().st_mtime_ns
+        counts = self._run(root, cache_file, execute=True)
+        # after execute, both files share one album tag with no discnumber
+        # mismatch, so this second run actually exercises the single-tag
+        # branch, not the multiset-clean branch directly — still valid
+        # end-to-end idempotency coverage.
+        assert counts["already"] == 1
+        assert counts["multiset_clean"] == 0
+        assert f.stat().st_mtime_ns == before
+
+    def test_incomplete_tape_clean_multiset_no_disc_one(self, audio_fixtures, tmp_path):
+        # Regression test: a two-set show missing its first-set tape (no "I"
+        # tag present, only "II" and "III") still classifies as a clean
+        # multi-set show. main_logic must not assume disc 1 exists when
+        # picking the source tag for venue resolution — it must pick the
+        # lowest disc number actually present (here, 2).
+        root = tmp_path / "col"
+        d = root / "Phish-1994-12-01.Salem.Armory.Salem.OR.[360]"
+        make_show_file(audio_fixtures, d, "s2.flac", album="1994/12/01 II Salem, OR")
+        make_show_file(audio_fixtures, d, "s3.flac", album="1994/12/01 III Salem, OR")
+        counts = self._run(root, tmp_path / "c.json", execute=True)
+        assert counts["multiset_clean"] == 1
+        want = "1994/12/01 Salem Armory, Salem, OR"
+        assert pt.read_album(d / "s2.flac") == want
+        assert pt.read_discnumber(d / "s2.flac") == "2"
+        assert pt.read_album(d / "s3.flac") == want
+        assert pt.read_discnumber(d / "s3.flac") == "3"
+
+    def test_clean_multiset_unresolved_venue(self, audio_fixtures, tmp_path):
+        # Clean multi-set show (matching date, valid I/II markers, identical
+        # remainder) whose location text has no "City, ST" the heuristic can
+        # split out, and livephish is mocked to miss — resolution fails and
+        # the directory lands in the shared unresolved bucket. Garbage
+        # remainder deliberately mirrors the existing unresolved fixture d4
+        # ("Big Cypress New Years").
+        root = tmp_path / "col"
+        d = root / "Phish-1996-08-16.Some.Random.Field.[555]"
+        make_show_file(audio_fixtures, d, "s1.flac", album="1996/08/16 I Loop Fest Nonsense")
+        make_show_file(audio_fixtures, d, "s2.flac", album="1996/08/16 II Loop Fest Nonsense")
+        counts = self._run(root, tmp_path / "c.json", execute=True)
+        assert counts["unresolved"] == 1
+        assert counts["multiset_clean"] == 0
+        assert counts["updated"] == 0
+        assert pt.read_album(d / "s1.flac") == "1996/08/16 I Loop Fest Nonsense"
+        assert pt.read_album(d / "s2.flac") == "1996/08/16 II Loop Fest Nonsense"
+        assert pt.read_discnumber(d / "s1.flac") == ""
+        assert pt.read_discnumber(d / "s2.flac") == ""
+
+    def test_multiset_anomaly_warning_lists_distinct_tags(self, audio_fixtures, tmp_path, capsys):
         root = tmp_path / "col"
         build_collection(audio_fixtures, root)
         self._run(root, tmp_path / "c.json", execute=False)
         err = capsys.readouterr().err
-        assert "1994/12/29 I Providence, RI" in err
-        assert "1994/12/29 II Providence, RI" in err
+        assert "1994/12/01 I Salem, OR" in err
+        assert "1994/12/01 II Salem, OR" in err
+        assert "1994/11/12 II Kent, OH" in err
 
-    def test_summary_lists_multiset_and_unresolved_dirs(self, audio_fixtures, tmp_path, capsys):
+    def test_summary_lists_multiset_anomaly_and_unresolved_dirs(self, audio_fixtures, tmp_path, capsys):
         root = tmp_path / "col"
         build_collection(audio_fixtures, root)
         self._run(root, tmp_path / "c.json", execute=False)
         out = capsys.readouterr().out
-        assert "Phish-1994-12-29.Providence.Civic.Center.Providence.RI.[498]" in out
+        assert "Phish-1994-12-01.Salem.Armory.Salem.OR.[359]" in out
         assert "Phish-1999-12-31.Big.Cypress.Seminole.Reservation.Big.Cypress.FL.[100]" in out
 
     def test_empty_dir_counts_as_skipped(self, audio_fixtures, tmp_path):
         root = tmp_path / "col"
         (root / "Phish-2026-07-22.Madison.Square.Garden.New.York.NY.[2761]").mkdir(parents=True)
         counts = self._run(root, tmp_path / "c.json", execute=False)
-        assert counts == {"updated": 0, "already": 0, "multiset": 0,
-                          "unresolved": 0, "skipped": 1}
+        assert counts == {"updated": 0, "already": 0, "multiset_clean": 0,
+                          "multiset_anomaly": 0, "unresolved": 0, "skipped": 1}
 
 
 class TestParseArgs:
