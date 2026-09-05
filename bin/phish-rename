@@ -11,6 +11,12 @@ matching, not a strict date filter) and any whose location doesn't match
 location text already in the directory name, and renames to:
   Phish-YYYY-MM-DD.Dot.Separated.Location.[LivePhishID]
 
+Shows livephish.com has no release for (never toured commercially, or not
+yet released) are reported as "not found" rather than renamed — since there
+is no LivePhish ID to build a canonical name from. In that case phish.net is
+queried as a courtesy to confirm the show and report its venue, purely for
+your manual research; it never drives a rename.
+
 Usage:
   phish-rename PATH
   phish-rename PATH --dry-run
@@ -23,6 +29,7 @@ Options:
   -h, --help    Show this message
 """
 
+import json
 import os
 import re
 import sys
@@ -66,6 +73,8 @@ HEADERS = {
         "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     )
 }
+
+PHISHNET_URL = "https://phish.net/setlists/?d={date}"
 
 # ── Core functions ─────────────────────────────────────────────────────────────
 
@@ -167,6 +176,35 @@ def search_livephish(date: str) -> str:
     return resp.text
 
 
+def fetch_phishnet_show(date: str):
+    """Fetch the phish.net setlist page for date, or None if phish.net has no show that day."""
+    url = PHISHNET_URL.format(date=date)
+    resp = requests.get(url, headers=HEADERS, timeout=10)
+    if resp.status_code == 404:
+        return None
+    resp.raise_for_status()
+    return resp.text
+
+
+def parse_phishnet_location(html: str):
+    """Pull the venue/city/state out of a phish.net setlist page's Event JSON-LD block."""
+    m = re.search(r'<script type="application/ld\+json">(.*?)</script>', html, re.DOTALL)
+    if not m:
+        return None
+    try:
+        data = json.loads(m.group(1))
+    except ValueError:
+        return None
+    location = data.get("location") or {}
+    name = location.get("name", "").strip()
+    address = location.get("address", "").strip()
+    if not name and not address:
+        return None
+    if name and address:
+        return f"{name}, {address}"
+    return name or address
+
+
 def pick_best_match(candidates: list, dirname: str = None):
     if not candidates:
         return None
@@ -213,7 +251,17 @@ def main_logic(path: Path, dry_run: bool):
         match = pick_best_match(candidates, entry.name)
 
         if match is None:
-            print(f"  {yellow('WARN')} {entry.name}: not found on livephish.com", file=sys.stderr)
+            note = ""
+            try:
+                pn_html = fetch_phishnet_show(date)
+                time.sleep(0.5)
+                if pn_html is not None:
+                    location = parse_phishnet_location(pn_html)
+                    if location:
+                        note = f" — phish.net confirms this show: {location} (no LivePhish release; needs a manual ID)"
+            except Exception:
+                pass
+            print(f"  {yellow('WARN')} {entry.name}: not found on livephish.com{note}", file=sys.stderr)
             skipped_not_found += 1
             continue
 

@@ -65,6 +65,23 @@ FIXTURE_HTML_SECOND_CANDIDATE_MATCHES = """
 </body></html>
 """
 
+FIXTURE_PHISHNET_SHOW = """
+<html><body>
+<script type="application/ld+json">
+{
+  "@context": "http://schema.org",
+  "@type": "Event",
+  "startDate" : "1999-10-10T20:00",
+  "location" : {
+    "@type" : "Place",
+    "name": "Pepsi Arena",
+    "address": "Albany, NY"
+  }
+}
+</script>
+</body></html>
+"""
+
 
 class TestDateFromDirname:
     def test_yyyy_dash_mm_dd(self):
@@ -202,6 +219,41 @@ class TestSearchLivephish:
                 pr.search_livephish("2024-01-01")
 
 
+class TestFetchPhishnetShow:
+    def test_returns_none_on_404(self):
+        mock_resp = MagicMock(status_code=404)
+        with patch("requests.get", return_value=mock_resp):
+            assert pr.fetch_phishnet_show("2000-01-02") is None
+
+    def test_returns_html_on_success(self):
+        mock_resp = MagicMock(status_code=200, text=FIXTURE_PHISHNET_SHOW)
+        mock_resp.raise_for_status = MagicMock()
+        with patch("requests.get", return_value=mock_resp) as mock_get:
+            result = pr.fetch_phishnet_show("1999-10-10")
+        url = mock_get.call_args[0][0]
+        assert "d=1999-10-10" in url
+        assert result == FIXTURE_PHISHNET_SHOW
+
+    def test_raises_on_other_http_error(self):
+        mock_resp = MagicMock(status_code=500)
+        mock_resp.raise_for_status.side_effect = Exception("500")
+        with patch("requests.get", return_value=mock_resp):
+            with pytest.raises(Exception, match="500"):
+                pr.fetch_phishnet_show("1999-10-10")
+
+
+class TestParsePhishnetLocation:
+    def test_extracts_venue_and_address(self):
+        assert pr.parse_phishnet_location(FIXTURE_PHISHNET_SHOW) == "Pepsi Arena, Albany, NY"
+
+    def test_returns_none_without_ld_json(self):
+        assert pr.parse_phishnet_location("<html><body>nothing here</body></html>") is None
+
+    def test_returns_none_on_malformed_json(self):
+        html = '<script type="application/ld+json">{not valid json</script>'
+        assert pr.parse_phishnet_location(html) is None
+
+
 class TestLocationMatches:
     def test_mismatched_state_and_venue(self):
         assert pr.location_matches("Phish-1999-10-10.Albany.NY", "MGM Grand Garden Arena, Las Vegas, NV") is False
@@ -284,8 +336,9 @@ class TestMainLogic:
         with tempfile.TemporaryDirectory() as tmp:
             self._make_dir(tmp, "2024-07-20 Xfinity Center Mansfield MA")
             with patch.object(pr, "search_livephish", return_value=FIXTURE_HTML_NO_RESULTS):
-                with patch("time.sleep"):
-                    pr.main_logic(Path(tmp), dry_run=True)
+                with patch.object(pr, "fetch_phishnet_show", return_value=None):
+                    with patch("time.sleep"):
+                        pr.main_logic(Path(tmp), dry_run=True)
             captured = capsys.readouterr()
             assert "not found" in captured.err
 
@@ -338,6 +391,39 @@ class TestMainLogic:
             assert "DRY RUN" not in captured.out
             assert (Path(tmp) / "Phish-1999-10-10.Albany.NY").exists()
 
+    def test_not_found_falls_back_to_phishnet_for_context(self, capsys):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._make_dir(tmp, "Phish-1999-10-10.Albany.NY")
+            with patch.object(pr, "search_livephish", return_value=FIXTURE_HTML_WRONG_DATE_RESULTS):
+                with patch.object(pr, "fetch_phishnet_show", return_value=FIXTURE_PHISHNET_SHOW):
+                    with patch("time.sleep"):
+                        pr.main_logic(Path(tmp), dry_run=True)
+            captured = capsys.readouterr()
+            assert "not found on livephish.com" in captured.err
+            assert "phish.net confirms this show: Pepsi Arena, Albany, NY" in captured.err
+            assert (Path(tmp) / "Phish-1999-10-10.Albany.NY").exists()
+
+    def test_not_found_with_no_phishnet_info_still_warns_plainly(self, capsys):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._make_dir(tmp, "Phish-1999-10-10.Albany.NY")
+            with patch.object(pr, "search_livephish", return_value=FIXTURE_HTML_NO_RESULTS):
+                with patch.object(pr, "fetch_phishnet_show", return_value=None):
+                    with patch("time.sleep"):
+                        pr.main_logic(Path(tmp), dry_run=True)
+            captured = capsys.readouterr()
+            assert "not found on livephish.com" in captured.err
+            assert "phish.net" not in captured.err
+
+    def test_phishnet_lookup_failure_does_not_break_not_found_warning(self, capsys):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._make_dir(tmp, "Phish-1999-10-10.Albany.NY")
+            with patch.object(pr, "search_livephish", return_value=FIXTURE_HTML_NO_RESULTS):
+                with patch.object(pr, "fetch_phishnet_show", side_effect=Exception("boom")):
+                    with patch("time.sleep"):
+                        pr.main_logic(Path(tmp), dry_run=True)
+            captured = capsys.readouterr()
+            assert "not found on livephish.com" in captured.err
+
     def test_fuzzy_search_results_for_wrong_date_are_not_found(self, capsys):
         # Regression: livephish.com's search returned results for 10/28/21
         # and 07/10/99 when asked about 1999-10-10 — a date it has no show
@@ -346,8 +432,9 @@ class TestMainLogic:
         with tempfile.TemporaryDirectory() as tmp:
             self._make_dir(tmp, "Phish-1999-10-10.Albany.NY")
             with patch.object(pr, "search_livephish", return_value=FIXTURE_HTML_WRONG_DATE_RESULTS):
-                with patch("time.sleep"):
-                    pr.main_logic(Path(tmp), dry_run=True)
+                with patch.object(pr, "fetch_phishnet_show", return_value=None):
+                    with patch("time.sleep"):
+                        pr.main_logic(Path(tmp), dry_run=True)
             captured = capsys.readouterr()
             assert "not found on livephish.com" in captured.err
             assert "location mismatch" not in captured.err
