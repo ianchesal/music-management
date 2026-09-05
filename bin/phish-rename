@@ -59,6 +59,11 @@ def yellow(s): return _ansi("93", s)
 def green(s):  return _ansi("92", s)
 
 
+def warn(dirname: str, detail: str):
+    print(f"  {yellow('WARN')} {dirname}:", file=sys.stderr)
+    print(f"        {detail}", file=sys.stderr)
+
+
 # ── Constants ──────────────────────────────────────────────────────────────────
 
 SEARCH_URL = (
@@ -243,7 +248,7 @@ def main_logic(path: Path, dry_run: bool):
             html = search_livephish(date)
             time.sleep(0.5)
         except Exception as e:
-            print(f"  {yellow('WARN')} {entry.name}: HTTP error — {e}", file=sys.stderr)
+            warn(entry.name, f"HTTP error — {e}")
             skipped_not_found += 1
             continue
 
@@ -261,18 +266,17 @@ def main_logic(path: Path, dry_run: bool):
                         note = f" — phish.net confirms this show: {location} (no LivePhish release; needs a manual ID)"
             except Exception:
                 pass
-            print(f"  {yellow('WARN')} {entry.name}: not found on livephish.com{note}", file=sys.stderr)
+            warn(entry.name, f"not found on livephish.com{note}")
             skipped_not_found += 1
             continue
 
         release_id, location_raw = match
 
         if not location_matches(entry.name, location_raw):
-            print(
-                f"  {yellow('WARN')} {entry.name}: location mismatch — "
-                f"directory suggests a different venue than the best livephish.com "
-                f"match ({location_raw.strip()}, [{release_id}]) — needs manual review",
-                file=sys.stderr,
+            warn(
+                entry.name,
+                f"location mismatch — directory suggests a different venue than the best "
+                f"livephish.com match ({location_raw.strip()}, [{release_id}]) — needs manual review",
             )
             skipped_location_mismatch += 1
             continue
@@ -284,7 +288,7 @@ def main_logic(path: Path, dry_run: bool):
         dst = path / new_name
 
         if dst.exists():
-            print(f"  {yellow('WARN')} skipping {entry.name}: destination already exists ({new_name})", file=sys.stderr)
+            warn(entry.name, f"skipping — destination already exists ({new_name})")
             skipped_collision += 1
             continue
 
