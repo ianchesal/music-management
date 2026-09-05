@@ -59,9 +59,10 @@ def yellow(s): return _ansi("93", s)
 def green(s):  return _ansi("92", s)
 
 
-def warn(dirname: str, detail: str):
+def warn(dirname: str, *details: str):
     print(f"  {yellow('WARN')} {dirname}:", file=sys.stderr)
-    print(f"        {detail}", file=sys.stderr)
+    for detail in details:
+        print(f"        {detail}", file=sys.stderr)
 
 
 # ── Constants ──────────────────────────────────────────────────────────────────
@@ -256,17 +257,18 @@ def main_logic(path: Path, dry_run: bool):
         match = pick_best_match(candidates, entry.name)
 
         if match is None:
-            note = ""
+            lines = ["not found on livephish.com"]
             try:
                 pn_html = fetch_phishnet_show(date)
                 time.sleep(0.5)
                 if pn_html is not None:
                     location = parse_phishnet_location(pn_html)
                     if location:
-                        note = f" — phish.net confirms this show: {location} (no LivePhish release; needs a manual ID)"
+                        lines.append(f"phish.net confirms this show: {location}")
+                        lines.append("no LivePhish release; needs a manual ID")
             except Exception:
                 pass
-            warn(entry.name, f"not found on livephish.com{note}")
+            warn(entry.name, *lines)
             skipped_not_found += 1
             continue
 
