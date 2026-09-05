@@ -5,7 +5,10 @@ phish-rename — Rename new Phish live show downloads to canonical LivePhish for
 Scans PATH for directories that aren't already in canonical form and contain a
 YYYY-MM-DD, YYYY_MM_DD, or YYYY.MM.DD date anywhere in their name (e.g. a raw
 date dir, or a hand-named "Phish-YYYY-MM-DD.Some.Location" dir with no ID
-suffix), looks up each show on livephish.com, and renames to:
+suffix), looks up each show on livephish.com, discards any search results
+whose actual date doesn't match (livephish.com's search is fuzzy text
+matching, not a strict date filter) and any whose location doesn't match
+location text already in the directory name, and renames to:
   Phish-YYYY-MM-DD.Dot.Separated.Location.[LivePhishID]
 
 Usage:
@@ -123,7 +126,17 @@ def to_canonical_name(date: str, location: str, release_id: str) -> str:
     return f"Phish-{date}.{location}.[{release_id}]"
 
 
-def parse_search_results(html: str) -> list:
+def alt_text_date(alt: str):
+    m = re.match(r'^(\d{1,2})/(\d{1,2})/(\d{2,4})\s*', alt)
+    if not m:
+        return None
+    mo, d, y = int(m.group(1)), int(m.group(2)), int(m.group(3))
+    if y < 100:
+        y += 2000 if y <= 50 else 1900
+    return f"{y:04d}-{mo:02d}-{d:02d}"
+
+
+def parse_search_results(html: str, expected_date: str = None) -> list:
     soup = BeautifulSoup(html, "html.parser")
     candidates = []
     seen_ids = set()
@@ -134,6 +147,8 @@ def parse_search_results(html: str) -> list:
             continue
         alt = img.get("alt", "").strip()
         if "4k" in alt.lower():
+            continue
+        if expected_date is not None and alt_text_date(alt) != expected_date:
             continue
         release_id = re.search(r"/LP-(\d+)\.html", a["href"]).group(1)
         if release_id in seen_ids:
@@ -194,7 +209,7 @@ def main_logic(path: Path, dry_run: bool):
             skipped_not_found += 1
             continue
 
-        candidates = parse_search_results(html)
+        candidates = parse_search_results(html, expected_date=date)
         match = pick_best_match(candidates, entry.name)
 
         if match is None:

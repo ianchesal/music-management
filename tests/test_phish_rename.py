@@ -45,6 +45,17 @@ FIXTURE_HTML_MISMATCHED_LOCATION = """
 </body></html>
 """
 
+# livephish.com's search is fuzzy text matching, not a strict date filter —
+# it can return results whose actual date doesn't match the query at all.
+FIXTURE_HTML_WRONG_DATE_RESULTS = """
+<html><body>
+<a href="/LP-1669.html"><img alt="10/28/21 MGM Grand Garden Arena, Las Vegas, NV " title="..."></a>
+<a href="/LP-1669.html">Phish</a>
+<a href="/LP-486.html"><img alt="07/10/99 E Center, Camden, NJ " title="..."></a>
+<a href="/LP-486.html">Phish</a>
+</body></html>
+"""
+
 FIXTURE_HTML_SECOND_CANDIDATE_MATCHES = """
 <html><body>
 <a href="/LP-1111.html"><img alt="07/20/24 Other Venue, Somewhere, ZZ " title="..."></a>
@@ -124,6 +135,20 @@ class TestToCanonicalName:
             "Phish-2009-11-27.Times.Union.Center.Albany.NY.[515]"
 
 
+class TestAltTextDate:
+    def test_two_digit_year_90s(self):
+        assert pr.alt_text_date("07/10/99 E Center, Camden, NJ") == "1999-07-10"
+
+    def test_two_digit_year_2000s(self):
+        assert pr.alt_text_date("10/28/21 MGM Grand Garden Arena, Las Vegas, NV") == "2021-10-28"
+
+    def test_four_digit_year(self):
+        assert pr.alt_text_date("07/20/2024 Xfinity Center, Mansfield, MA") == "2024-07-20"
+
+    def test_no_leading_date_returns_none(self):
+        assert pr.alt_text_date("Xfinity Center, Mansfield, MA") is None
+
+
 class TestParseSearchResults:
     def test_returns_non_4k_result(self):
         results = pr.parse_search_results(FIXTURE_HTML_TWO_RESULTS)
@@ -143,6 +168,17 @@ class TestParseSearchResults:
         results = pr.parse_search_results(FIXTURE_HTML_ONE_RESULT)
         _, location = results[0]
         assert not location.startswith("11/")
+
+    def test_expected_date_filters_out_unrelated_results(self):
+        # livephish.com's fuzzy search can return results for a date nobody
+        # asked about; expected_date should drop anything that doesn't match.
+        results = pr.parse_search_results(FIXTURE_HTML_WRONG_DATE_RESULTS, expected_date="1999-10-10")
+        assert results == []
+
+    def test_expected_date_keeps_matching_result(self):
+        results = pr.parse_search_results(FIXTURE_HTML_TWO_RESULTS, expected_date="2024-07-20")
+        assert len(results) == 1
+        assert results[0] == ("2259", "Xfinity Center, Mansfield, MA")
 
 
 class TestSearchLivephish:
@@ -300,6 +336,21 @@ class TestMainLogic:
             captured = capsys.readouterr()
             assert "location mismatch" in captured.err
             assert "DRY RUN" not in captured.out
+            assert (Path(tmp) / "Phish-1999-10-10.Albany.NY").exists()
+
+    def test_fuzzy_search_results_for_wrong_date_are_not_found(self, capsys):
+        # Regression: livephish.com's search returned results for 10/28/21
+        # and 07/10/99 when asked about 1999-10-10 — a date it has no show
+        # for at all. Those must be filtered out as "not found", not treated
+        # as a match (whether or not their location happens to look wrong).
+        with tempfile.TemporaryDirectory() as tmp:
+            self._make_dir(tmp, "Phish-1999-10-10.Albany.NY")
+            with patch.object(pr, "search_livephish", return_value=FIXTURE_HTML_WRONG_DATE_RESULTS):
+                with patch("time.sleep"):
+                    pr.main_logic(Path(tmp), dry_run=True)
+            captured = capsys.readouterr()
+            assert "not found on livephish.com" in captured.err
+            assert "location mismatch" not in captured.err
             assert (Path(tmp) / "Phish-1999-10-10.Albany.NY").exists()
 
     def test_picks_matching_candidate_over_first_result(self, capsys):
