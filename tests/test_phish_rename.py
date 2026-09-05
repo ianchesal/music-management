@@ -38,6 +38,50 @@ FIXTURE_HTML_NO_RESULTS = """
 <html><body><p>No results found for your search.</p></body></html>
 """
 
+FIXTURE_HTML_MISMATCHED_LOCATION = """
+<html><body>
+<a href="/LP-1669.html"><img alt="10/10/99 MGM Grand Garden Arena, Las Vegas, NV " title="..."></a>
+<a href="/LP-1669.html">Phish</a>
+</body></html>
+"""
+
+# livephish.com's search is fuzzy text matching, not a strict date filter —
+# it can return results whose actual date doesn't match the query at all.
+FIXTURE_HTML_WRONG_DATE_RESULTS = """
+<html><body>
+<a href="/LP-1669.html"><img alt="10/28/21 MGM Grand Garden Arena, Las Vegas, NV " title="..."></a>
+<a href="/LP-1669.html">Phish</a>
+<a href="/LP-486.html"><img alt="07/10/99 E Center, Camden, NJ " title="..."></a>
+<a href="/LP-486.html">Phish</a>
+</body></html>
+"""
+
+FIXTURE_HTML_SECOND_CANDIDATE_MATCHES = """
+<html><body>
+<a href="/LP-1111.html"><img alt="07/20/24 Other Venue, Somewhere, ZZ " title="..."></a>
+<a href="/LP-1111.html">Phish</a>
+<a href="/LP-2259.html"><img alt="07/20/24 Xfinity Center, Mansfield, MA " title="..."></a>
+<a href="/LP-2259.html">Phish</a>
+</body></html>
+"""
+
+FIXTURE_PHISHNET_SHOW = """
+<html><body>
+<script type="application/ld+json">
+{
+  "@context": "http://schema.org",
+  "@type": "Event",
+  "startDate" : "1999-10-10T20:00",
+  "location" : {
+    "@type" : "Place",
+    "name": "Pepsi Arena",
+    "address": "Albany, NY"
+  }
+}
+</script>
+</body></html>
+"""
+
 
 class TestDateFromDirname:
     def test_yyyy_dash_mm_dd(self):
@@ -55,11 +99,19 @@ class TestDateFromDirname:
     def test_single_digit_day(self):
         assert pr.date_from_dirname("1994-12-6 Goleta, CA") == "1994-12-06"
 
-    def test_conforming_name_returns_none(self):
-        assert pr.date_from_dirname("Phish-2024-07-20.Xfinity.Center.Mansfield.MA.[2259]") is None
+    def test_conforming_name_still_extracts_date(self):
+        # main_logic never calls this for conforming names (is_conforming is
+        # checked first), but the extraction itself is now prefix-agnostic.
+        assert pr.date_from_dirname("Phish-2024-07-20.Xfinity.Center.Mansfield.MA.[2259]") == "2024-07-20"
+
+    def test_hand_named_with_phish_prefix_no_id(self):
+        assert pr.date_from_dirname("Phish-2026-09-04.Dicks.Sporting.Goods.Park.Commerce.City.CO") == "2026-09-04"
 
     def test_undated_returns_none(self):
         assert pr.date_from_dirname("Live Bait Vol 10") is None
+
+    def test_id_bracket_not_mistaken_for_date(self):
+        assert pr.date_from_dirname("Some.Show.[2259]") is None
 
 
 class TestIsConforming:
@@ -100,6 +152,20 @@ class TestToCanonicalName:
             "Phish-2009-11-27.Times.Union.Center.Albany.NY.[515]"
 
 
+class TestAltTextDate:
+    def test_two_digit_year_90s(self):
+        assert pr.alt_text_date("07/10/99 E Center, Camden, NJ") == "1999-07-10"
+
+    def test_two_digit_year_2000s(self):
+        assert pr.alt_text_date("10/28/21 MGM Grand Garden Arena, Las Vegas, NV") == "2021-10-28"
+
+    def test_four_digit_year(self):
+        assert pr.alt_text_date("07/20/2024 Xfinity Center, Mansfield, MA") == "2024-07-20"
+
+    def test_no_leading_date_returns_none(self):
+        assert pr.alt_text_date("Xfinity Center, Mansfield, MA") is None
+
+
 class TestParseSearchResults:
     def test_returns_non_4k_result(self):
         results = pr.parse_search_results(FIXTURE_HTML_TWO_RESULTS)
@@ -119,6 +185,17 @@ class TestParseSearchResults:
         results = pr.parse_search_results(FIXTURE_HTML_ONE_RESULT)
         _, location = results[0]
         assert not location.startswith("11/")
+
+    def test_expected_date_filters_out_unrelated_results(self):
+        # livephish.com's fuzzy search can return results for a date nobody
+        # asked about; expected_date should drop anything that doesn't match.
+        results = pr.parse_search_results(FIXTURE_HTML_WRONG_DATE_RESULTS, expected_date="1999-10-10")
+        assert results == []
+
+    def test_expected_date_keeps_matching_result(self):
+        results = pr.parse_search_results(FIXTURE_HTML_TWO_RESULTS, expected_date="2024-07-20")
+        assert len(results) == 1
+        assert results[0] == ("2259", "Xfinity Center, Mansfield, MA")
 
 
 class TestSearchLivephish:
@@ -142,6 +219,67 @@ class TestSearchLivephish:
                 pr.search_livephish("2024-01-01")
 
 
+class TestFetchPhishnetShow:
+    def test_returns_none_on_404(self):
+        mock_resp = MagicMock(status_code=404)
+        with patch("requests.get", return_value=mock_resp):
+            assert pr.fetch_phishnet_show("2000-01-02") is None
+
+    def test_returns_html_on_success(self):
+        mock_resp = MagicMock(status_code=200, text=FIXTURE_PHISHNET_SHOW)
+        mock_resp.raise_for_status = MagicMock()
+        with patch("requests.get", return_value=mock_resp) as mock_get:
+            result = pr.fetch_phishnet_show("1999-10-10")
+        url = mock_get.call_args[0][0]
+        assert "d=1999-10-10" in url
+        assert result == FIXTURE_PHISHNET_SHOW
+
+    def test_raises_on_other_http_error(self):
+        mock_resp = MagicMock(status_code=500)
+        mock_resp.raise_for_status.side_effect = Exception("500")
+        with patch("requests.get", return_value=mock_resp):
+            with pytest.raises(Exception, match="500"):
+                pr.fetch_phishnet_show("1999-10-10")
+
+
+class TestParsePhishnetLocation:
+    def test_extracts_venue_and_address(self):
+        assert pr.parse_phishnet_location(FIXTURE_PHISHNET_SHOW) == "Pepsi Arena, Albany, NY"
+
+    def test_returns_none_without_ld_json(self):
+        assert pr.parse_phishnet_location("<html><body>nothing here</body></html>") is None
+
+    def test_returns_none_on_malformed_json(self):
+        html = '<script type="application/ld+json">{not valid json</script>'
+        assert pr.parse_phishnet_location(html) is None
+
+
+class TestLocationMatches:
+    def test_mismatched_state_and_venue(self):
+        assert pr.location_matches("Phish-1999-10-10.Albany.NY", "MGM Grand Garden Arena, Las Vegas, NV") is False
+
+    def test_mismatched_city(self):
+        assert pr.location_matches("Phish-2023-07-23.Syracuse.NY", "Higher Ground, Burlington, VT") is False
+
+    def test_matching_city_state(self):
+        assert pr.location_matches("Phish-2023-08-31.Commerce.City.CO", "Dick's Sporting Goods Park, Commerce City, CO") is True
+
+    def test_matching_hand_named_apostrophe_variant(self):
+        assert pr.location_matches(
+            "Phish-2026-09-04.Dicks.Sporting.Goods.Park.Commerce.City.CO",
+            "Dick's Sporting Goods Park, Commerce City, CO",
+        ) is True
+
+    def test_no_hint_always_matches(self):
+        assert pr.location_matches("Phish-2024-07-20", "Xfinity Center, Mansfield, MA") is True
+
+    def test_generic_words_alone_dont_count_as_a_match(self):
+        assert pr.location_matches("Phish-1997-12-11.War.Memorial", "Memorial Auditorium, Somewhere, ZZ") is False
+
+    def test_shared_state_code_alone_is_not_a_match(self):
+        assert pr.location_matches("Phish-2023-07-23.Syracuse.NY", "Madison Square Garden, New York, NY") is False
+
+
 class TestPickBestMatch:
     def test_returns_first_candidate(self):
         candidates = [("2259", "Xfinity Center, Mansfield, MA"), ("9999", "Other Venue")]
@@ -149,6 +287,14 @@ class TestPickBestMatch:
 
     def test_returns_none_for_empty(self):
         assert pr.pick_best_match([]) is None
+
+    def test_prefers_candidate_matching_dirname_location(self):
+        candidates = [("1111", "Other Venue, Somewhere, ZZ"), ("2259", "Xfinity Center, Mansfield, MA")]
+        assert pr.pick_best_match(candidates, "2024-07-20 Xfinity Center Mansfield MA") == ("2259", "Xfinity Center, Mansfield, MA")
+
+    def test_falls_back_to_first_when_none_match(self):
+        candidates = [("1111", "Other Venue, Somewhere, ZZ"), ("2222", "Another Venue, Elsewhere, YY")]
+        assert pr.pick_best_match(candidates, "Phish-1999-10-10.Albany.NY") == ("1111", "Other Venue, Somewhere, ZZ")
 
 
 class TestMainLogic:
@@ -190,8 +336,9 @@ class TestMainLogic:
         with tempfile.TemporaryDirectory() as tmp:
             self._make_dir(tmp, "2024-07-20 Xfinity Center Mansfield MA")
             with patch.object(pr, "search_livephish", return_value=FIXTURE_HTML_NO_RESULTS):
-                with patch("time.sleep"):
-                    pr.main_logic(Path(tmp), dry_run=True)
+                with patch.object(pr, "fetch_phishnet_show", return_value=None):
+                    with patch("time.sleep"):
+                        pr.main_logic(Path(tmp), dry_run=True)
             captured = capsys.readouterr()
             assert "not found" in captured.err
 
@@ -215,6 +362,88 @@ class TestMainLogic:
         with tempfile.TemporaryDirectory() as tmp:
             self._make_dir(tmp, "2024_07_20 Xfinity Center Mansfield MA")
             with patch.object(pr, "search_livephish", return_value=FIXTURE_HTML_TWO_RESULTS):
+                with patch("time.sleep"):
+                    pr.main_logic(Path(tmp), dry_run=False)
+            assert (Path(tmp) / "Phish-2024-07-20.Xfinity.Center.Mansfield.MA.[2259]").exists()
+
+    def test_hand_named_dir_with_id_missing_gets_renamed(self, capsys):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._make_dir(tmp, "Phish-2026-09-04.Dicks.Sporting.Goods.Park.Commerce.City.CO")
+            html = """
+            <html><body>
+            <a href="/LP-2768.html"><img alt="09/04/26 Dick's Sporting Goods Park, Commerce City, CO " title="..."></a>
+            <a href="/LP-2768.html">Phish</a>
+            </body></html>
+            """
+            with patch.object(pr, "search_livephish", return_value=html):
+                with patch("time.sleep"):
+                    pr.main_logic(Path(tmp), dry_run=False)
+            assert (Path(tmp) / "Phish-2026-09-04.Dick's.Sporting.Goods.Park.Commerce.City.CO.[2768]").exists()
+
+    def test_location_mismatch_is_skipped_not_renamed(self, capsys):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._make_dir(tmp, "Phish-1999-10-10.Albany.NY")
+            with patch.object(pr, "search_livephish", return_value=FIXTURE_HTML_MISMATCHED_LOCATION):
+                with patch("time.sleep"):
+                    pr.main_logic(Path(tmp), dry_run=True)
+            captured = capsys.readouterr()
+            assert "location mismatch" in captured.err
+            assert "DRY RUN" not in captured.out
+            assert (Path(tmp) / "Phish-1999-10-10.Albany.NY").exists()
+
+    def test_not_found_falls_back_to_phishnet_for_context(self, capsys):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._make_dir(tmp, "Phish-1999-10-10.Albany.NY")
+            with patch.object(pr, "search_livephish", return_value=FIXTURE_HTML_WRONG_DATE_RESULTS):
+                with patch.object(pr, "fetch_phishnet_show", return_value=FIXTURE_PHISHNET_SHOW):
+                    with patch("time.sleep"):
+                        pr.main_logic(Path(tmp), dry_run=True)
+            captured = capsys.readouterr()
+            assert "not found on livephish.com" in captured.err
+            assert "phish.net confirms this show: Pepsi Arena, Albany, NY" in captured.err
+            assert (Path(tmp) / "Phish-1999-10-10.Albany.NY").exists()
+
+    def test_not_found_with_no_phishnet_info_still_warns_plainly(self, capsys):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._make_dir(tmp, "Phish-1999-10-10.Albany.NY")
+            with patch.object(pr, "search_livephish", return_value=FIXTURE_HTML_NO_RESULTS):
+                with patch.object(pr, "fetch_phishnet_show", return_value=None):
+                    with patch("time.sleep"):
+                        pr.main_logic(Path(tmp), dry_run=True)
+            captured = capsys.readouterr()
+            assert "not found on livephish.com" in captured.err
+            assert "phish.net" not in captured.err
+
+    def test_phishnet_lookup_failure_does_not_break_not_found_warning(self, capsys):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._make_dir(tmp, "Phish-1999-10-10.Albany.NY")
+            with patch.object(pr, "search_livephish", return_value=FIXTURE_HTML_NO_RESULTS):
+                with patch.object(pr, "fetch_phishnet_show", side_effect=Exception("boom")):
+                    with patch("time.sleep"):
+                        pr.main_logic(Path(tmp), dry_run=True)
+            captured = capsys.readouterr()
+            assert "not found on livephish.com" in captured.err
+
+    def test_fuzzy_search_results_for_wrong_date_are_not_found(self, capsys):
+        # Regression: livephish.com's search returned results for 10/28/21
+        # and 07/10/99 when asked about 1999-10-10 — a date it has no show
+        # for at all. Those must be filtered out as "not found", not treated
+        # as a match (whether or not their location happens to look wrong).
+        with tempfile.TemporaryDirectory() as tmp:
+            self._make_dir(tmp, "Phish-1999-10-10.Albany.NY")
+            with patch.object(pr, "search_livephish", return_value=FIXTURE_HTML_WRONG_DATE_RESULTS):
+                with patch.object(pr, "fetch_phishnet_show", return_value=None):
+                    with patch("time.sleep"):
+                        pr.main_logic(Path(tmp), dry_run=True)
+            captured = capsys.readouterr()
+            assert "not found on livephish.com" in captured.err
+            assert "location mismatch" not in captured.err
+            assert (Path(tmp) / "Phish-1999-10-10.Albany.NY").exists()
+
+    def test_picks_matching_candidate_over_first_result(self, capsys):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._make_dir(tmp, "2024-07-20 Xfinity Center Mansfield MA")
+            with patch.object(pr, "search_livephish", return_value=FIXTURE_HTML_SECOND_CANDIDATE_MATCHES):
                 with patch("time.sleep"):
                     pr.main_logic(Path(tmp), dry_run=False)
             assert (Path(tmp) / "Phish-2024-07-20.Xfinity.Center.Mansfield.MA.[2259]").exists()

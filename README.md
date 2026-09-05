@@ -59,7 +59,7 @@ cp sync/config/phish.conf sync/config/your-artist.conf
 
 Python tools for working with Phish live show collections alongside a LivePhish torrent download:
 
-- **`phish-rename`** — Rename downloaded show directories to canonical LivePhish format by looking up each show on livephish.com. Produces names like `Phish-YYYY-MM-DD.Dot.Separated.Location.[LivePhishID]`.
+- **`phish-rename`** — Rename downloaded show directories to canonical LivePhish format by looking up each show on livephish.com. Matches any non-conforming directory with a date anywhere in its name (raw date dirs, or hand-named `Phish-YYYY-MM-DD.Location` dirs missing the `[ID]` suffix). livephish.com's search is fuzzy text matching rather than a strict date filter, so results are validated against the requested date, and any location text already in the directory name is cross-checked against the match — anything that doesn't check out is skipped with a warning instead of being renamed. When livephish.com has no release for a show at all, phish.net is queried to confirm the show and report its venue in the warning, purely for manual research — it never drives a rename since there's no LivePhish ID to build one from. Produces names like `Phish-YYYY-MM-DD.Dot.Separated.Location.[LivePhishID]`.
 - **`phish-compare`** — Compare an existing Phish collection against a torrent download. Reports matched shows, unique shows on each side, studio album cross-references, and undated items.
 - **`phish-merge`** — Merge an existing Phish live show collection with a torrent download. Runs four phases: NAS backup, copy new shows, replace matched shows with canonical torrent copies, rename existing-only shows to torrent naming style.
 - **`phish-retag`** — Normalize the album tag on every audio file in canonical show directories to `YYYY/MM/DD Venue, City, ST`, derived from the directory name. Resolves venue/city boundaries from existing tags when possible, falling back to livephish.com (results cached). Clean multi-set shows — directories whose distinct album tags differ only by a set marker (`I`–`V`) right after the date, e.g. `1994/05/07 I Dallas, TX` / `...II...` — get the marker converted to a `discnumber` tag and the album collapsed to the uniform format. Messier multi-set directories (contamination from another show, missing markers, disagreeing venue text) are skipped with a warning for manual review.
@@ -214,7 +214,7 @@ bats --filter "load_global_config" sync-lib.bats
 
 **Pytest tests** (Python bin/ tools):
 ```bash
-pytest tests/                     # Run all Python tests (190+ tests)
+pytest tests/                     # Run all Python tests (244 tests)
 pytest tests/test_phish_rename.py # Tests for phish-rename
 pytest tests/test_phish_merge.py  # Tests for phish-merge
 pytest tests/test_phish_retag.py  # Tests for phish-retag
@@ -347,7 +347,7 @@ sync/
 
 tests/                        # Test suite
 ├── *.bats                   # Bats tests for sync scripts (28 tests)
-├── test_phish_*.py          # Pytest tests for bin/ tools (190+ tests)
+├── test_phish_*.py          # Pytest tests for bin/ tools (244 tests)
 ├── test_helper.bash         # Bats test utilities
 └── README.md                # Testing documentation
 

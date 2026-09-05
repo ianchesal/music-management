@@ -17,7 +17,7 @@ This is a collection of music management tools for handling live show collection
 
 Three Python tools designed to work together as a pipeline when integrating a LivePhish torrent download with an existing collection, plus a standalone tag normalizer:
 
-- **`phish-rename`** — Queries livephish.com to rename show directories from any date-based format to `Phish-YYYY-MM-DD.Dot.Separated.Location.[LivePhishID]`. Requires `requests` and `beautifulsoup4`.
+- **`phish-rename`** — Queries livephish.com to rename show directories to `Phish-YYYY-MM-DD.Dot.Separated.Location.[LivePhishID]`. Matches any non-conforming directory with a date anywhere in its name (raw date dirs, or hand-named `Phish-YYYY-MM-DD.Location` dirs missing the `[ID]` suffix). livephish.com's search is fuzzy text matching, not a strict date filter, so search results are discarded if their actual show date doesn't match the requested date; if the directory name already carries location text, it's also cross-checked against the match. Anything that fails either check is skipped with a warning for manual review rather than renamed. When livephish.com has no release for the show at all, phish.net is queried (via its setlist page, not the paid API) purely to confirm the show and report its venue in the warning for manual research — it never drives a rename. Requires `requests` and `beautifulsoup4`.
 - **`phish-compare`** — Read-only diagnostic: shows matched/unmatched shows, studio album cross-references, and undated items in both the existing collection and torrent.
 - **`phish-merge`** — Performs the actual merge in up to four phases: (1) rsync backup to NAS, (2) copy torrent-only shows, (3) replace matched shows with canonical torrent copies, (4) rename existing-only shows to torrent naming style. Supports `--dry-run` and `--phase N`.
 - **`phish-retag`** — Normalizes the album tag on every audio file in canonical show directories to `YYYY/MM/DD Venue, City, ST`, derived from the directory name, and normalizes the date tag to the show's date (`YYYY-MM-DD`). Venue/city boundaries resolve from existing tags when possible, falling back to livephish.com (jittered requests, results cached in `$XDG_CACHE_HOME/phish-retag.json`). Clean multi-set directories — distinct album tags differing only by a set marker (`I`-`V`) right after the date, with otherwise-matching venue text — get the marker converted to a `discnumber` tag and the album collapsed to the uniform format. Messier multi-set directories (contamination, missing markers, disagreeing venue text) are skipped with a warning. Only the album, discnumber, and date tags are touched. Requires `mutagen`.
@@ -114,7 +114,7 @@ bats music-sync.bats          # Integration tests (9 tests)
 bats --verbose-run *.bats     # Verbose output for debugging
 ```
 
-### Pytest Tests (Python bin/ tools — 130+ tests)
+### Pytest Tests (Python bin/ tools — 244 tests)
 ```bash
 pytest tests/                        # Run all Python tests
 pytest tests/test_phish_rename.py    # Tests for phish-rename
