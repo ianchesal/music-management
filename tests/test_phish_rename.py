@@ -38,6 +38,22 @@ FIXTURE_HTML_NO_RESULTS = """
 <html><body><p>No results found for your search.</p></body></html>
 """
 
+FIXTURE_HTML_MISMATCHED_LOCATION = """
+<html><body>
+<a href="/LP-1669.html"><img alt="10/10/99 MGM Grand Garden Arena, Las Vegas, NV " title="..."></a>
+<a href="/LP-1669.html">Phish</a>
+</body></html>
+"""
+
+FIXTURE_HTML_SECOND_CANDIDATE_MATCHES = """
+<html><body>
+<a href="/LP-1111.html"><img alt="07/20/24 Other Venue, Somewhere, ZZ " title="..."></a>
+<a href="/LP-1111.html">Phish</a>
+<a href="/LP-2259.html"><img alt="07/20/24 Xfinity Center, Mansfield, MA " title="..."></a>
+<a href="/LP-2259.html">Phish</a>
+</body></html>
+"""
+
 
 class TestDateFromDirname:
     def test_yyyy_dash_mm_dd(self):
@@ -55,11 +71,19 @@ class TestDateFromDirname:
     def test_single_digit_day(self):
         assert pr.date_from_dirname("1994-12-6 Goleta, CA") == "1994-12-06"
 
-    def test_conforming_name_returns_none(self):
-        assert pr.date_from_dirname("Phish-2024-07-20.Xfinity.Center.Mansfield.MA.[2259]") is None
+    def test_conforming_name_still_extracts_date(self):
+        # main_logic never calls this for conforming names (is_conforming is
+        # checked first), but the extraction itself is now prefix-agnostic.
+        assert pr.date_from_dirname("Phish-2024-07-20.Xfinity.Center.Mansfield.MA.[2259]") == "2024-07-20"
+
+    def test_hand_named_with_phish_prefix_no_id(self):
+        assert pr.date_from_dirname("Phish-2026-09-04.Dicks.Sporting.Goods.Park.Commerce.City.CO") == "2026-09-04"
 
     def test_undated_returns_none(self):
         assert pr.date_from_dirname("Live Bait Vol 10") is None
+
+    def test_id_bracket_not_mistaken_for_date(self):
+        assert pr.date_from_dirname("Some.Show.[2259]") is None
 
 
 class TestIsConforming:
@@ -142,6 +166,32 @@ class TestSearchLivephish:
                 pr.search_livephish("2024-01-01")
 
 
+class TestLocationMatches:
+    def test_mismatched_state_and_venue(self):
+        assert pr.location_matches("Phish-1999-10-10.Albany.NY", "MGM Grand Garden Arena, Las Vegas, NV") is False
+
+    def test_mismatched_city(self):
+        assert pr.location_matches("Phish-2023-07-23.Syracuse.NY", "Higher Ground, Burlington, VT") is False
+
+    def test_matching_city_state(self):
+        assert pr.location_matches("Phish-2023-08-31.Commerce.City.CO", "Dick's Sporting Goods Park, Commerce City, CO") is True
+
+    def test_matching_hand_named_apostrophe_variant(self):
+        assert pr.location_matches(
+            "Phish-2026-09-04.Dicks.Sporting.Goods.Park.Commerce.City.CO",
+            "Dick's Sporting Goods Park, Commerce City, CO",
+        ) is True
+
+    def test_no_hint_always_matches(self):
+        assert pr.location_matches("Phish-2024-07-20", "Xfinity Center, Mansfield, MA") is True
+
+    def test_generic_words_alone_dont_count_as_a_match(self):
+        assert pr.location_matches("Phish-1997-12-11.War.Memorial", "Memorial Auditorium, Somewhere, ZZ") is False
+
+    def test_shared_state_code_alone_is_not_a_match(self):
+        assert pr.location_matches("Phish-2023-07-23.Syracuse.NY", "Madison Square Garden, New York, NY") is False
+
+
 class TestPickBestMatch:
     def test_returns_first_candidate(self):
         candidates = [("2259", "Xfinity Center, Mansfield, MA"), ("9999", "Other Venue")]
@@ -149,6 +199,14 @@ class TestPickBestMatch:
 
     def test_returns_none_for_empty(self):
         assert pr.pick_best_match([]) is None
+
+    def test_prefers_candidate_matching_dirname_location(self):
+        candidates = [("1111", "Other Venue, Somewhere, ZZ"), ("2259", "Xfinity Center, Mansfield, MA")]
+        assert pr.pick_best_match(candidates, "2024-07-20 Xfinity Center Mansfield MA") == ("2259", "Xfinity Center, Mansfield, MA")
+
+    def test_falls_back_to_first_when_none_match(self):
+        candidates = [("1111", "Other Venue, Somewhere, ZZ"), ("2222", "Another Venue, Elsewhere, YY")]
+        assert pr.pick_best_match(candidates, "Phish-1999-10-10.Albany.NY") == ("1111", "Other Venue, Somewhere, ZZ")
 
 
 class TestMainLogic:
@@ -215,6 +273,39 @@ class TestMainLogic:
         with tempfile.TemporaryDirectory() as tmp:
             self._make_dir(tmp, "2024_07_20 Xfinity Center Mansfield MA")
             with patch.object(pr, "search_livephish", return_value=FIXTURE_HTML_TWO_RESULTS):
+                with patch("time.sleep"):
+                    pr.main_logic(Path(tmp), dry_run=False)
+            assert (Path(tmp) / "Phish-2024-07-20.Xfinity.Center.Mansfield.MA.[2259]").exists()
+
+    def test_hand_named_dir_with_id_missing_gets_renamed(self, capsys):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._make_dir(tmp, "Phish-2026-09-04.Dicks.Sporting.Goods.Park.Commerce.City.CO")
+            html = """
+            <html><body>
+            <a href="/LP-2768.html"><img alt="09/04/26 Dick's Sporting Goods Park, Commerce City, CO " title="..."></a>
+            <a href="/LP-2768.html">Phish</a>
+            </body></html>
+            """
+            with patch.object(pr, "search_livephish", return_value=html):
+                with patch("time.sleep"):
+                    pr.main_logic(Path(tmp), dry_run=False)
+            assert (Path(tmp) / "Phish-2026-09-04.Dick's.Sporting.Goods.Park.Commerce.City.CO.[2768]").exists()
+
+    def test_location_mismatch_is_skipped_not_renamed(self, capsys):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._make_dir(tmp, "Phish-1999-10-10.Albany.NY")
+            with patch.object(pr, "search_livephish", return_value=FIXTURE_HTML_MISMATCHED_LOCATION):
+                with patch("time.sleep"):
+                    pr.main_logic(Path(tmp), dry_run=True)
+            captured = capsys.readouterr()
+            assert "location mismatch" in captured.err
+            assert "DRY RUN" not in captured.out
+            assert (Path(tmp) / "Phish-1999-10-10.Albany.NY").exists()
+
+    def test_picks_matching_candidate_over_first_result(self, capsys):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._make_dir(tmp, "2024-07-20 Xfinity Center Mansfield MA")
+            with patch.object(pr, "search_livephish", return_value=FIXTURE_HTML_SECOND_CANDIDATE_MATCHES):
                 with patch("time.sleep"):
                     pr.main_logic(Path(tmp), dry_run=False)
             assert (Path(tmp) / "Phish-2024-07-20.Xfinity.Center.Mansfield.MA.[2259]").exists()

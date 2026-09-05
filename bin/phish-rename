@@ -2,8 +2,10 @@
 """
 phish-rename — Rename new Phish live show downloads to canonical LivePhish format.
 
-Scans PATH for directories matching YYYY-MM-DD, YYYY_MM_DD, or YYYY.MM.DD naming patterns,
-looks up each show on livephish.com, and renames to:
+Scans PATH for directories that aren't already in canonical form and contain a
+YYYY-MM-DD, YYYY_MM_DD, or YYYY.MM.DD date anywhere in their name (e.g. a raw
+date dir, or a hand-named "Phish-YYYY-MM-DD.Some.Location" dir with no ID
+suffix), looks up each show on livephish.com, and renames to:
   Phish-YYYY-MM-DD.Dot.Separated.Location.[LivePhishID]
 
 Usage:
@@ -65,7 +67,7 @@ HEADERS = {
 # ── Core functions ─────────────────────────────────────────────────────────────
 
 def date_from_dirname(dirname: str):
-    m = re.match(r'^(\d{4})[-_.](\d{1,2})[-_.](\d{1,2})\b', dirname)
+    m = re.search(r'(?<!\d)(\d{4})[-_.](\d{1,2})[-_.](\d{1,2})\b', dirname)
     if m:
         y, mo, d = m.group(1), int(m.group(2)), int(m.group(3))
         return f"{y}-{mo:02d}-{d:02d}"
@@ -74,6 +76,40 @@ def date_from_dirname(dirname: str):
 
 def is_conforming(dirname: str) -> bool:
     return bool(re.match(r'^Phish-\d{4}-\d{2}-\d{2}\..+\.\[\d+\]$', dirname))
+
+
+# Words too generic to prove a location match on their own (e.g. "Center"
+# alone shouldn't confirm two different arenas are the same place).
+GENERIC_LOCATION_WORDS = {
+    "the", "center", "centre", "arena", "theatre", "theater", "amphitheater",
+    "amphitheatre", "auditorium", "pavilion", "civic", "memorial", "hall",
+    "coliseum", "field", "stadium", "ballroom", "park", "complex", "grounds",
+    "fairgrounds", "university", "college", "club", "casino", "resort",
+    "hotel", "concert", "music", "festival", "campus",
+}
+
+
+def location_tokens(text: str) -> set:
+    text = text.lower().replace("’", "'")
+    words = re.findall(r"[a-z0-9']+", text)
+    return {w.strip("'") for w in words} - GENERIC_LOCATION_WORDS
+
+
+def extract_location_hint(dirname: str) -> str:
+    remainder = re.sub(r'^Phish-', '', dirname)
+    remainder = re.sub(r'(?<!\d)\d{4}[-_.]\d{1,2}[-_.]\d{1,2}\b', '', remainder, count=1)
+    remainder = re.sub(r'\.?\[\d+\]$', '', remainder)
+    return remainder
+
+
+def location_matches(dirname: str, candidate_location: str) -> bool:
+    hint_tokens = location_tokens(extract_location_hint(dirname))
+    if not hint_tokens:
+        return True
+    overlap = hint_tokens & location_tokens(candidate_location)
+    # A shared 2-letter token (almost always a US state code) isn't enough
+    # on its own — Syracuse, NY and New York, NY would "match" on "ny".
+    return any(len(token) > 2 for token in overlap)
 
 
 def location_to_dots(location_str: str) -> str:
@@ -116,8 +152,14 @@ def search_livephish(date: str) -> str:
     return resp.text
 
 
-def pick_best_match(candidates: list):
-    return candidates[0] if candidates else None
+def pick_best_match(candidates: list, dirname: str = None):
+    if not candidates:
+        return None
+    if dirname is not None:
+        for candidate in candidates:
+            if location_matches(dirname, candidate[1]):
+                return candidate
+    return candidates[0]
 
 
 # ── Main logic ─────────────────────────────────────────────────────────────────
@@ -128,6 +170,7 @@ def main_logic(path: Path, dry_run: bool):
     skipped_not_found = 0
     skipped_collision = 0
     skipped_unrecognized = 0
+    skipped_location_mismatch = 0
 
     entries = sorted(path.iterdir(), key=lambda e: e.name.lower())
     for entry in entries:
@@ -152,7 +195,7 @@ def main_logic(path: Path, dry_run: bool):
             continue
 
         candidates = parse_search_results(html)
-        match = pick_best_match(candidates)
+        match = pick_best_match(candidates, entry.name)
 
         if match is None:
             print(f"  {yellow('WARN')} {entry.name}: not found on livephish.com", file=sys.stderr)
@@ -160,6 +203,17 @@ def main_logic(path: Path, dry_run: bool):
             continue
 
         release_id, location_raw = match
+
+        if not location_matches(entry.name, location_raw):
+            print(
+                f"  {yellow('WARN')} {entry.name}: location mismatch — "
+                f"directory suggests a different venue than the best livephish.com "
+                f"match ({location_raw.strip()}, [{release_id}]) — needs manual review",
+                file=sys.stderr,
+            )
+            skipped_location_mismatch += 1
+            continue
+
         location = location_to_dots(location_raw)
         new_name = to_canonical_name(date, location, release_id)
 
@@ -184,6 +238,7 @@ def main_logic(path: Path, dry_run: bool):
     print(f"  {dim(str(skipped_conforming))}  skipped (already conforming)")
     print(f"  {yellow(str(skipped_not_found))}  skipped (not found on livephish.com)")
     print(f"  {yellow(str(skipped_collision))}  skipped (destination already exists)")
+    print(f"  {yellow(str(skipped_location_mismatch))}  skipped (location mismatch — needs manual review)")
     print(f"  {dim(str(skipped_unrecognized))}  skipped (unrecognized format)")
     print()
 
