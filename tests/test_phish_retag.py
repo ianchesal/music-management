@@ -761,7 +761,7 @@ class TestStateCache:
         cache_file, state_file = tmp_path / "c.json", tmp_path / "s.json"
         counts = self._run(root, cache_file, state_file, execute=False)
         assert counts["already"] == 1
-        with patch.object(pt, "read_album") as mock_read:
+        with patch.object(pt, "read_tags") as mock_read:
             counts = self._run(root, cache_file, state_file, execute=False)
         mock_read.assert_not_called()
         assert counts["already"] == 1
@@ -774,8 +774,11 @@ class TestStateCache:
         make_show_file(audio_fixtures, d, "t2.flac",
                        album="2026/07/12 Ruoff Music Center, Noblesville, IN",
                        date="2026-07-12")
-        with patch.object(pt, "read_album") as mock_read:
-            mock_read.return_value = "2026/07/12 Ruoff Music Center, Noblesville, IN"
+        with patch.object(pt, "read_tags") as mock_read:
+            mock_read.return_value = {
+                "album": "2026/07/12 Ruoff Music Center, Noblesville, IN",
+                "discnumber": "", "date": "2026-07-12",
+            }
             self._run(root, cache_file, state_file, execute=False)
         mock_read.assert_called()
 
@@ -784,8 +787,11 @@ class TestStateCache:
         self._correct_show(audio_fixtures, root)
         cache_file, state_file = tmp_path / "c.json", tmp_path / "s.json"
         self._run(root, cache_file, state_file, execute=False)
-        with patch.object(pt, "read_album") as mock_read:
-            mock_read.return_value = "2026/07/12 Ruoff Music Center, Noblesville, IN"
+        with patch.object(pt, "read_tags") as mock_read:
+            mock_read.return_value = {
+                "album": "2026/07/12 Ruoff Music Center, Noblesville, IN",
+                "discnumber": "", "date": "2026-07-12",
+            }
             self._run(root, cache_file, state_file, execute=False, rescan=True)
         mock_read.assert_called()
 
@@ -794,8 +800,11 @@ class TestStateCache:
         d1, *_ = build_collection(audio_fixtures, root)
         cache_file, state_file = tmp_path / "c.json", tmp_path / "s.json"
         self._run(root, cache_file, state_file, execute=False)
-        with patch.object(pt, "read_album") as mock_read:
-            mock_read.return_value = "Phish - Phish - 2026_07_21 Syracuse, NY (Phis)"
+        with patch.object(pt, "read_tags") as mock_read:
+            mock_read.return_value = {
+                "album": "Phish - Phish - 2026_07_21 Syracuse, NY (Phis)",
+                "discnumber": "", "date": "",
+            }
             self._run(root, cache_file, state_file, execute=False)
         mock_read.assert_called()
 
@@ -804,7 +813,7 @@ class TestStateCache:
         d1, *_ = build_collection(audio_fixtures, root)
         cache_file, state_file = tmp_path / "c.json", tmp_path / "s.json"
         self._run(root, cache_file, state_file, execute=True)
-        with patch.object(pt, "read_album") as mock_read:
+        with patch.object(pt, "read_tags") as mock_read:
             counts = self._run(root, cache_file, state_file, execute=False)
         mock_read.assert_not_called()
         assert counts["already"] >= 1
@@ -815,8 +824,11 @@ class TestStateCache:
         cache_file = tmp_path / "c.json"
         with patch.object(pt, "livephish_location", return_value=None):
             pt.main_logic(root, execute=False, cache_path=cache_file)
-            with patch.object(pt, "read_album") as mock_read:
-                mock_read.return_value = "2026/07/12 Ruoff Music Center, Noblesville, IN"
+            with patch.object(pt, "read_tags") as mock_read:
+                mock_read.return_value = {
+                    "album": "2026/07/12 Ruoff Music Center, Noblesville, IN",
+                    "discnumber": "", "date": "2026-07-12",
+                }
                 pt.main_logic(root, execute=False, cache_path=cache_file)
         mock_read.assert_called()
 

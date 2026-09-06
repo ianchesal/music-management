@@ -480,6 +480,42 @@ def write_date(path: Path, date: str) -> bool:
     return True
 
 
+def read_tags(path: Path):
+    """album/discnumber/date in one open — the hot path reads all three per
+    file, and each separate read_*() call above re-opens and re-parses the
+    file from scratch, so main_logic uses this instead. Returns None if
+    unreadable, else a dict with "" for any untagged field."""
+    audio = _open_audio(path)
+    if audio is None:
+        return None
+    if audio.tags is None:
+        return {"album": "", "discnumber": "", "date": ""}
+    return {
+        "album": (audio.get("album") or [""])[0],
+        "discnumber": (audio.get("discnumber") or [""])[0],
+        "date": (audio.get("date") or [""])[0],
+    }
+
+
+def write_tags(path: Path, updates: dict) -> bool:
+    """Apply a batch of tag changes (keys: album/discnumber/date) with a
+    single open+save, instead of one open+save per tag — mutagen's save()
+    can rewrite the whole file (padding-dependent, worst case on FLAC), so
+    doing it once per file instead of up to three times per file is the
+    difference that matters for a large --execute run."""
+    if not updates:
+        return True
+    audio = _open_audio(path)
+    if audio is None:
+        return False
+    if audio.tags is None:
+        audio.add_tags()
+    for key, value in updates.items():
+        audio[key] = value
+    audio.save()
+    return True
+
+
 # ── Main logic ─────────────────────────────────────────────────────────────────
 
 def main_logic(path: Path, execute: bool, cache_path: Path,
@@ -533,13 +569,15 @@ def main_logic(path: Path, execute: bool, cache_path: Path,
                 print(f"  {dim('SKIP')}      {entry.name} (cached — still a multi-set anomaly)", file=sys.stderr)
                 continue
 
+        tags = {}
         albums = {}
         for f in files:
-            album = read_album(f)
-            if album is None:
+            t = read_tags(f)
+            if t is None:
                 print(f"  {yellow('WARN')} unreadable audio file: {f}", file=sys.stderr)
                 continue
-            albums[f] = album
+            tags[f] = t
+            albums[f] = t["album"]
 
         distinct = sorted(set(albums.values()))
         if len(distinct) > 1:
@@ -571,13 +609,13 @@ def main_logic(path: Path, execute: bool, cache_path: Path,
                 continue
 
             target = target_album(date, resolved)
-            dates = {f: read_date(f) for f in files if f in albums}
+            dates = {f: tags[f]["date"] for f in files if f in albums}
             # Defensive: in practice all_correct is rarely True here — a directory
             # where every file's tag had already collapsed to the uniform target
             # album (and date) would have only one distinct tag, routing through
             # the single-tag branch above instead.
             all_correct = all(
-                albums[f] == target and read_discnumber(f) == str(clean[albums[f]])
+                albums[f] == target and tags[f]["discnumber"] == str(clean[albums[f]])
                 and dates.get(f) == date
                 for f in files if f in albums
             )
@@ -601,17 +639,14 @@ def main_logic(path: Path, execute: bool, cache_path: Path,
                 tag = albums[f]
                 disc_str = str(clean[tag])
                 date_ok = dates.get(f) == date
-                if albums.get(f) == target and read_discnumber(f) == disc_str and date_ok:
+                if albums.get(f) == target and tags[f]["discnumber"] == disc_str and date_ok:
                     continue
                 if execute:
-                    if not write_album(f, target):
-                        print(f"  {yellow('WARN')} could not write tag: {f}", file=sys.stderr)
-                        continue
-                    if not write_discnumber(f, disc_str):
-                        print(f"  {yellow('WARN')} could not write discnumber: {f}", file=sys.stderr)
-                        continue
-                    if not date_ok and not write_date(f, date):
-                        print(f"  {yellow('WARN')} could not write date tag: {f}", file=sys.stderr)
+                    updates = {"album": target, "discnumber": disc_str}
+                    if not date_ok:
+                        updates["date"] = date
+                    if not write_tags(f, updates):
+                        print(f"  {yellow('WARN')} could not write tags: {f}", file=sys.stderr)
                         continue
                 files_updated += 1
             if state_path is not None:
@@ -633,7 +668,7 @@ def main_logic(path: Path, execute: bool, cache_path: Path,
             continue
 
         target = target_album(date, resolved)
-        dates = {f: read_date(f) for f in files if f in albums}
+        dates = {f: tags[f]["date"] for f in files if f in albums}
         album_ok = current == target
         dates_ok = all(d == date for d in dates.values())
         if album_ok and dates_ok:
@@ -658,11 +693,13 @@ def main_logic(path: Path, execute: bool, cache_path: Path,
             if not needs_album and not needs_date:
                 continue
             if execute:
-                if needs_album and not write_album(f, target):
-                    print(f"  {yellow('WARN')} could not write tag: {f}", file=sys.stderr)
-                    continue
-                if needs_date and not write_date(f, date):
-                    print(f"  {yellow('WARN')} could not write date tag: {f}", file=sys.stderr)
+                updates = {}
+                if needs_album:
+                    updates["album"] = target
+                if needs_date:
+                    updates["date"] = date
+                if not write_tags(f, updates):
+                    print(f"  {yellow('WARN')} could not write tags: {f}", file=sys.stderr)
                     continue
             files_updated += 1
         if state_path is not None:
