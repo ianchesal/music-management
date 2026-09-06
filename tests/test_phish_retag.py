@@ -272,6 +272,14 @@ class TestRoundTripOk:
             "Dicks.Sporting.Goods.Park.Commerce.City.CO",
         ) is True
 
+    def test_dicks_apostrophe_quirk_round_trips_when_dir_keeps_apostrophe(self):
+        # Some directories keep the apostrophe verbatim rather than stripping
+        # it. The quirk must be applied to both sides so either form matches.
+        assert pt.round_trip_ok(
+            "Dick's Sporting Goods Park, Commerce City, CO",
+            "Dick's.Sporting.Goods.Park.Commerce.City.CO",
+        ) is True
+
     def test_other_apostrophes_are_not_silently_stripped(self):
         # The quirk list is a literal one-off, not a general apostrophe
         # stripper — an unrelated apostrophe mismatch should still fail.
