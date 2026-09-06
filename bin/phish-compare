@@ -9,6 +9,11 @@ Also compares a studio album path against the torrent's non-show items.
 Usage:
   phish-compare
   phish-compare --existing PATH --torrent PATH --studio PATH
+
+If --existing/--torrent are omitted, they default to $PHISH_COLLECTION_DIR
+and $PHISH_INTAKE_DIR respectively (or the matching keys in a .env file at
+the repo root, if the real environment variables aren't set), falling back
+to hard-coded paths if neither is set.
 """
 
 import os
@@ -22,6 +27,39 @@ from collections import defaultdict
 DEFAULT_EXISTING = Path("/data/media/Sorted/Unsorted/Music/Phish")
 DEFAULT_TORRENT  = Path("/data/torrents/Phish-Live.Phish.Project-2002-2026")
 DEFAULT_STUDIO   = Path("/data/media/Sorted/Music/Phish")
+
+COLLECTION_ENV_VAR = "PHISH_COLLECTION_DIR"
+INTAKE_ENV_VAR = "PHISH_INTAKE_DIR"
+
+
+def _dotenv_path():
+    return Path(__file__).resolve().parent.parent / ".env"
+
+
+def _load_dotenv():
+    path = _dotenv_path()
+    if not path.exists():
+        return
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        os.environ.setdefault(key, value)
+
+
+def default_collection_path():
+    _load_dotenv()
+    value = os.environ.get(COLLECTION_ENV_VAR)
+    return Path(value) if value else DEFAULT_EXISTING
+
+
+def default_intake_path():
+    _load_dotenv()
+    value = os.environ.get(INTAKE_ENV_VAR)
+    return Path(value) if value else DEFAULT_TORRENT
 
 # ── Terminal ──────────────────────────────────────────────────────────────────
 
@@ -376,12 +414,12 @@ def print_summary(matched, ex_only, tr_only, ex_undated, tr_undated,
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 
-def main():
-    existing_path = DEFAULT_EXISTING
-    torrent_path  = DEFAULT_TORRENT
+def parse_args(argv):
+    existing_path = None
+    torrent_path  = None
     studio_path   = DEFAULT_STUDIO
 
-    args = sys.argv[1:]
+    args = argv[1:]
     i = 0
     while i < len(args):
         if args[i] in ("-e", "--existing") and i + 1 < len(args):
@@ -396,6 +434,17 @@ def main():
         else:
             print(f"Unknown argument: {args[i]}", file=sys.stderr)
             sys.exit(1)
+
+    if existing_path is None:
+        existing_path = default_collection_path()
+    if torrent_path is None:
+        torrent_path = default_intake_path()
+
+    return existing_path, torrent_path, studio_path
+
+
+def main():
+    existing_path, torrent_path, studio_path = parse_args(sys.argv)
 
     print_header(existing_path, torrent_path, studio_path)
 

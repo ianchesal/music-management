@@ -1,0 +1,257 @@
+#!/usr/bin/env python3
+"""
+phish-intake — Unzip new Phish show downloads and run them through
+phish-rename and phish-retag in one pass.
+
+For each *.zip in ZIPDIR: if the zip's contents already share a single
+top-level directory, it's extracted into COLLECTION as-is; otherwise (loose
+files at the top level) a directory is created from the zip's own filename
+and the contents are extracted into it — the same naming convention you'd
+use by hand, so phish-rename picks it up on the next step. A zip whose name
+carries no recognizable date, or whose show already exists in the
+collection, is skipped with a warning.
+
+After extraction, phish-rename and phish-retag are each run once (dry-run,
+then, on confirmation, --execute) over the whole collection. Finally, for
+each zip that was successfully extracted, you're asked whether to delete it.
+
+Usage:
+  phish-intake [ZIPDIR] [--collection PATH] [--yes]
+
+If ZIPDIR/--collection are omitted, they default to $PHISH_INTAKE_DIR and
+$PHISH_COLLECTION_DIR respectively (or the matching keys in a .env file at
+the repo root, if the real environment variables aren't set).
+
+Options:
+  ZIPDIR            Directory containing show zip files [default: $PHISH_INTAKE_DIR]
+  --collection PATH Existing collection directory [default: $PHISH_COLLECTION_DIR]
+  --yes             Don't prompt; execute rename/retag and delete zips automatically
+  -h, --help        Show this message
+"""
+
+import os
+import re
+import subprocess
+import sys
+import zipfile
+from collections import namedtuple
+from pathlib import Path
+
+# ── Config ─────────────────────────────────────────────────────────────────────
+
+COLLECTION_ENV_VAR = "PHISH_COLLECTION_DIR"
+INTAKE_ENV_VAR = "PHISH_INTAKE_DIR"
+
+
+def _dotenv_path():
+    return Path(__file__).resolve().parent.parent / ".env"
+
+
+def _load_dotenv():
+    path = _dotenv_path()
+    if not path.exists():
+        return
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        os.environ.setdefault(key, value)
+
+
+def default_collection_path():
+    _load_dotenv()
+    value = os.environ.get(COLLECTION_ENV_VAR)
+    return Path(value) if value else None
+
+
+def default_intake_path():
+    _load_dotenv()
+    value = os.environ.get(INTAKE_ENV_VAR)
+    return Path(value) if value else None
+
+
+# ── Zip inspection ─────────────────────────────────────────────────────────────
+
+def zip_common_top_level(zip_path: Path):
+    """Return the single shared top-level path component of every entry in
+    zip_path, or None if entries are loose or span more than one directory."""
+    with zipfile.ZipFile(zip_path) as zf:
+        tops = set()
+        for name in zf.namelist():
+            if not name.strip("/"):
+                continue
+            if "/" in name.rstrip("/"):
+                tops.add(name.split("/", 1)[0])
+            elif name.endswith("/"):
+                tops.add(name.rstrip("/"))
+            else:
+                # A loose file sitting at the zip's root — no common directory.
+                return None
+    return tops.pop() if len(tops) == 1 else None
+
+
+def date_from_dirname(dirname: str):
+    m = re.search(r'(?<!\d)(\d{4})[-_.](\d{1,2})[-_.](\d{1,2})\b', dirname)
+    if m:
+        y, mo, d = m.group(1), int(m.group(2)), int(m.group(3))
+        return f"{y}-{mo:02d}-{d:02d}"
+    return None
+
+
+ExtractionPlan = namedtuple("ExtractionPlan", ["action", "target_dirname", "reason"])
+
+
+def plan_extraction(zip_path: Path, existing_dirnames: set, existing_dates: set) -> ExtractionPlan:
+    top = zip_common_top_level(zip_path)
+    target = top if top is not None else zip_path.stem
+
+    date = date_from_dirname(target)
+    if date is None:
+        return ExtractionPlan("skip_no_date", None, f"no date found in {zip_path.name}")
+
+    if target in existing_dirnames:
+        return ExtractionPlan("skip_exists", target, f"{target} already exists in the collection")
+
+    if date in existing_dates:
+        return ExtractionPlan("skip_exists", target, f"a show dated {date} already exists in the collection")
+
+    return ExtractionPlan("extract", target, None)
+
+
+def extract_zip(zip_path: Path, collection_dir: Path, target_dirname: str):
+    top = zip_common_top_level(zip_path)
+    dest_root = collection_dir if top is not None else collection_dir / target_dirname
+    dest_root.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(zip_path) as zf:
+        zf.extractall(dest_root)
+
+
+# ── Directory scanning ───────────────────────────────────────────────────────────
+
+def find_zips(zips_dir: Path):
+    return sorted(zips_dir.glob("*.zip"))
+
+
+def collection_dirnames(collection_dir: Path) -> set:
+    return {p.name for p in collection_dir.iterdir() if p.is_dir()}
+
+
+def collection_dates(dirnames: set) -> set:
+    dates = {date_from_dirname(name) for name in dirnames}
+    dates.discard(None)
+    return dates
+
+
+IntakeResult = namedtuple("IntakeResult", ["zip_path", "plan"])
+
+
+def intake_zips(zips_dir: Path, collection_dir: Path):
+    dirnames = collection_dirnames(collection_dir)
+    dates = collection_dates(dirnames)
+    results = []
+    for zip_path in find_zips(zips_dir):
+        plan = plan_extraction(zip_path, dirnames, dates)
+        if plan.action == "extract":
+            extract_zip(zip_path, collection_dir, plan.target_dirname)
+            dirnames.add(plan.target_dirname)
+            date = date_from_dirname(plan.target_dirname)
+            if date:
+                dates.add(date)
+            print(f"  extracted  {zip_path.name} -> {plan.target_dirname}")
+        else:
+            print(f"  SKIP       {zip_path.name} ({plan.reason})")
+        results.append(IntakeResult(zip_path, plan))
+    return results
+
+
+# ── Confirmation / subprocess wiring ─────────────────────────────────────────────
+
+def confirm(prompt: str) -> bool:
+    return input(f"{prompt} [y/N] ").strip().lower() == "y"
+
+
+def run_tool(script_name: str, collection_dir: Path, execute: bool):
+    script_path = Path(__file__).resolve().parent / script_name
+    args = [sys.executable, str(script_path), str(collection_dir)]
+    args.append("--execute" if execute else "--dry-run")
+    return subprocess.run(args)
+
+
+# ── CLI ───────────────────────────────────────────────────────────────────────
+
+def parse_args(argv):
+    zips_dir = None
+    collection_dir = None
+    auto_yes = False
+
+    args = argv[1:]
+    i = 0
+    while i < len(args):
+        if args[i] in ("-h", "--help"):
+            print(__doc__)
+            sys.exit(0)
+        elif args[i] == "--collection":
+            if i + 1 >= len(args):
+                print("Error: --collection requires a directory argument", file=sys.stderr)
+                sys.exit(1)
+            collection_dir = Path(args[i + 1])
+            i += 2
+        elif args[i] == "--yes":
+            auto_yes = True
+            i += 1
+        elif not args[i].startswith("-"):
+            zips_dir = Path(args[i])
+            i += 1
+        else:
+            print(f"Unknown argument: {args[i]}", file=sys.stderr)
+            sys.exit(1)
+
+    if zips_dir is None:
+        zips_dir = default_intake_path()
+    if collection_dir is None:
+        collection_dir = default_collection_path()
+
+    if zips_dir is None:
+        print("Error: ZIPDIR is required", file=sys.stderr)
+        sys.exit(1)
+    if collection_dir is None:
+        print("Error: --collection is required", file=sys.stderr)
+        sys.exit(1)
+
+    return zips_dir, collection_dir, auto_yes
+
+
+def main():
+    zips_dir, collection_dir, auto_yes = parse_args(sys.argv)
+
+    print(f"\n  Zips:       {zips_dir}")
+    print(f"  Collection: {collection_dir}\n")
+
+    results = intake_zips(zips_dir, collection_dir)
+    extracted = [r for r in results if r.plan.action == "extract"]
+
+    if not extracted:
+        print("\nNothing new to process.")
+        return
+
+    print(f"\n{len(extracted)} show(s) extracted. Running phish-rename (dry run)...\n")
+    run_tool("phish-rename", collection_dir, execute=False)
+    if auto_yes or confirm("\nRun phish-rename --execute?"):
+        run_tool("phish-rename", collection_dir, execute=True)
+
+    print("\nRunning phish-retag (dry run)...\n")
+    run_tool("phish-retag", collection_dir, execute=False)
+    if auto_yes or confirm("\nRun phish-retag --execute?"):
+        run_tool("phish-retag", collection_dir, execute=True)
+
+    print()
+    for result in extracted:
+        if auto_yes or confirm(f"Delete {result.zip_path.name}?"):
+            result.zip_path.unlink()
+
+
+if __name__ == "__main__":
+    main()

@@ -45,5 +45,6 @@ Desktop.ini
 # Personal configuration files that might contain sensitive paths
 config.local
 *.local
+.env
 
 /.claude/settings.local.json

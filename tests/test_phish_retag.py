@@ -23,6 +23,12 @@ def load_module():
 pt = load_module()
 
 
+@pytest.fixture(autouse=True)
+def isolated_env(monkeypatch, tmp_path):
+    monkeypatch.delenv("PHISH_COLLECTION_DIR", raising=False)
+    monkeypatch.setattr(pt, "_dotenv_path", lambda: tmp_path / "unused.env")
+
+
 class TestParseShowDirname:
     def test_canonical_name(self):
         assert pt.parse_show_dirname(
@@ -903,3 +909,28 @@ class TestParseArgs:
     def test_unknown_flag_exits(self, tmp_path):
         with pytest.raises(SystemExit):
             pt.parse_args(["phish-retag", str(tmp_path), "--bogus"])
+
+
+class TestCollectionDirEnvVar:
+    def test_env_var_used_when_path_omitted(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("PHISH_COLLECTION_DIR", str(tmp_path))
+        path, *_ = pt.parse_args(["phish-retag"])
+        assert path == tmp_path
+
+    def test_explicit_path_overrides_env_var(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("PHISH_COLLECTION_DIR", str(tmp_path))
+        other = tmp_path / "other"
+        other.mkdir()
+        path, *_ = pt.parse_args(["phish-retag", str(other)])
+        assert path == other
+
+    def test_dotenv_file_used_when_no_real_env_var(self, monkeypatch, tmp_path):
+        dotenv = tmp_path / ".env"
+        dotenv.write_text(f"PHISH_COLLECTION_DIR={tmp_path}\n")
+        monkeypatch.setattr(pt, "_dotenv_path", lambda: dotenv)
+        path, *_ = pt.parse_args(["phish-retag"])
+        assert path == tmp_path
+
+    def test_no_env_var_falls_back_to_hardcoded_default(self):
+        path, *_ = pt.parse_args(["phish-retag"])
+        assert path == pt.DEFAULT_PATH

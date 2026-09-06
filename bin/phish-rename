@@ -33,8 +33,13 @@ Usage:
   phish-rename PATH --dry-run
   phish-rename PATH --execute
 
+If PATH is omitted, it defaults to $PHISH_COLLECTION_DIR (or the value of
+PHISH_COLLECTION_DIR in a .env file at the repo root, if the real
+environment variable isn't set).
+
 Options:
-  PATH          Directory containing show subdirectories (required)
+  PATH          Directory containing show subdirectories
+                [default: $PHISH_COLLECTION_DIR]
   --dry-run     Print planned renames, touch nothing [default]
   --execute     Perform the actual renames
   --rescan      Ignore cached skip results; re-check every directory
@@ -51,6 +56,34 @@ from pathlib import Path
 
 import requests
 from bs4 import BeautifulSoup
+
+# ── Config ─────────────────────────────────────────────────────────────────────
+
+COLLECTION_ENV_VAR = "PHISH_COLLECTION_DIR"
+
+
+def _dotenv_path():
+    return Path(__file__).resolve().parent.parent / ".env"
+
+
+def _load_dotenv():
+    path = _dotenv_path()
+    if not path.exists():
+        return
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        os.environ.setdefault(key, value)
+
+
+def default_collection_path():
+    _load_dotenv()
+    value = os.environ.get(COLLECTION_ENV_VAR)
+    return Path(value) if value else None
 
 # ── Terminal ───────────────────────────────────────────────────────────────────
 
@@ -418,6 +451,9 @@ def parse_args(argv):
         else:
             print(f"Unknown argument: {args[i]}", file=sys.stderr)
             sys.exit(1)
+
+    if path is None:
+        path = default_collection_path()
 
     if path is None:
         print("Error: PATH is required", file=sys.stderr)

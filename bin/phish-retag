@@ -35,8 +35,14 @@ Usage:
   phish-retag [PATH] --cache FILE
   phish-retag [PATH] --state FILE
 
+If PATH is omitted, it defaults to $PHISH_COLLECTION_DIR (or the value of
+PHISH_COLLECTION_DIR in a .env file at the repo root, if the real
+environment variable isn't set), falling back to a hard-coded path if
+neither is set.
+
 Options:
-  PATH          Collection directory [default: /data/media/Sorted/Unsorted/Music/Phish]
+  PATH          Collection directory
+                [default: $PHISH_COLLECTION_DIR, else /data/media/Sorted/Unsorted/Music/Phish]
   --dry-run     Print planned changes, touch nothing [default]
   --execute     Apply tag changes (default is dry run)
   --cache FILE  Location cache [default: $XDG_CACHE_HOME/phish-retag.json]
@@ -75,6 +81,32 @@ def green(s):  return _ansi("92", s)
 # ── Constants ──────────────────────────────────────────────────────────────────
 
 DEFAULT_PATH = Path("/data/media/Sorted/Unsorted/Music/Phish")
+
+COLLECTION_ENV_VAR = "PHISH_COLLECTION_DIR"
+
+
+def _dotenv_path():
+    return Path(__file__).resolve().parent.parent / ".env"
+
+
+def _load_dotenv():
+    path = _dotenv_path()
+    if not path.exists():
+        return
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        os.environ.setdefault(key, value)
+
+
+def default_collection_path():
+    _load_dotenv()
+    value = os.environ.get(COLLECTION_ENV_VAR)
+    return Path(value) if value else DEFAULT_PATH
 
 AUDIO_EXTS = {".flac", ".m4a", ".mp3"}
 
@@ -711,7 +743,7 @@ def parse_args(argv):
             sys.exit(1)
 
     if path is None:
-        path = DEFAULT_PATH
+        path = default_collection_path()
     if cache_path is None:
         cache_path = default_cache_path()
     if state_path is None:

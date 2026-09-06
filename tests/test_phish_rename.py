@@ -20,6 +20,12 @@ def load_module():
 
 pr = load_module()
 
+
+@pytest.fixture(autouse=True)
+def isolated_env(monkeypatch, tmp_path):
+    monkeypatch.delenv("PHISH_COLLECTION_DIR", raising=False)
+    monkeypatch.setattr(pr, "_dotenv_path", lambda: tmp_path / "unused.env")
+
 FIXTURE_HTML_TWO_RESULTS = """
 <html><body>
 <a href="/LP-2259.html"><img alt="07/20/24 Xfinity Center, Mansfield, MA " title="..."></a>
@@ -570,3 +576,40 @@ class TestParseArgs:
         with tempfile.TemporaryDirectory() as tmp:
             with pytest.raises(SystemExit):
                 pr.parse_args(["phish-rename", tmp, "--unknown"])
+
+
+class TestCollectionDirEnvVar:
+    def test_env_var_used_when_path_omitted(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("PHISH_COLLECTION_DIR", str(tmp_path))
+        path, *_ = pr.parse_args(["phish-rename"])
+        assert path == tmp_path
+
+    def test_explicit_path_overrides_env_var(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("PHISH_COLLECTION_DIR", str(tmp_path))
+        other = tmp_path / "other"
+        other.mkdir()
+        path, *_ = pr.parse_args(["phish-rename", str(other)])
+        assert path == other
+
+    def test_dotenv_file_used_when_no_real_env_var(self, monkeypatch, tmp_path):
+        dotenv = tmp_path / ".env"
+        dotenv.write_text(f"PHISH_COLLECTION_DIR={tmp_path}\n")
+        monkeypatch.setattr(pr, "_dotenv_path", lambda: dotenv)
+        path, *_ = pr.parse_args(["phish-rename"])
+        assert path == tmp_path
+
+    def test_real_env_var_takes_precedence_over_dotenv_file(self, monkeypatch, tmp_path):
+        real = tmp_path / "real"
+        real.mkdir()
+        from_dotenv = tmp_path / "from-dotenv"
+        from_dotenv.mkdir()
+        dotenv = tmp_path / ".env"
+        dotenv.write_text(f"PHISH_COLLECTION_DIR={from_dotenv}\n")
+        monkeypatch.setattr(pr, "_dotenv_path", lambda: dotenv)
+        monkeypatch.setenv("PHISH_COLLECTION_DIR", str(real))
+        path, *_ = pr.parse_args(["phish-rename"])
+        assert path == real
+
+    def test_missing_path_and_no_env_var_still_exits(self):
+        with pytest.raises(SystemExit):
+            pr.parse_args(["phish-rename"])

@@ -15,16 +15,21 @@ This is a collection of music management tools for handling live show collection
 
 ### Phish Collection Tools (`bin/`)
 
-Three Python tools designed to work together as a pipeline when integrating a LivePhish torrent download with an existing collection, plus a standalone tag normalizer:
+Four Python tools designed to work together as a pipeline when integrating new Phish downloads (a LivePhish torrent, or individual show zips) with an existing collection, plus a standalone tag normalizer:
 
+- **`phish-intake`** — Batch entry point for the common tour-season workflow: unzip a batch of downloaded show zips, then run them through `phish-rename` and `phish-retag`. For each `*.zip` in a zips directory, if the zip's contents already share one common top-level directory it's extracted into the collection as-is; if the zip holds loose files at the top level, a directory is created from the zip's own filename (the same convention you'd use naming it by hand) and the contents extracted into that. A zip whose name carries no recognizable date, or whose show (by directory name or by date) already exists in the collection, is skipped with a warning — nothing is guessed. After extraction, `phish-rename` and `phish-retag` are each run once (dry-run, then, on confirmation, `--execute`) over the whole collection — not per-zip, since both tools already skip directories that haven't changed. Finally, for each zip that was successfully extracted, you're asked whether to delete it. Pass `--yes` to skip all confirmation prompts (execute steps and zip deletion) for unattended batch runs.
 - **`phish-rename`** — Queries livephish.com to rename show directories to `Phish-YYYY-MM-DD.Dot.Separated.Location.[LivePhishID]`. Matches any non-conforming directory with a date anywhere in its name (raw date dirs, or hand-named `Phish-YYYY-MM-DD.Location` dirs missing the `[ID]` suffix). livephish.com's search is fuzzy text matching, not a strict date filter, so search results are discarded if their actual show date doesn't match the requested date; if the directory name already carries location text, it's also cross-checked against the match. Anything that fails either check is skipped with a warning for manual review rather than renamed. When livephish.com has no release for the show at all, phish.net is queried (via its setlist page, not the paid API) purely to confirm the show and report its venue in the warning for manual research — it never drives a rename. Repeat runs skip a directory that hasn't changed (same name, same mtime) and previously came back "not found" or "location mismatch," avoiding a repeat network round trip; this skip never expires on its own (usage is bursty around tour season, so a calendar TTL wouldn't track anything real) — pass `--rescan` to force a fresh check, e.g. when you know livephish.com just added a release. Skip state lives in `$XDG_CACHE_HOME/phish-rename-state.json` (override with `--state`). Requires `requests` and `beautifulsoup4`.
 - **`phish-compare`** — Read-only diagnostic: shows matched/unmatched shows, studio album cross-references, and undated items in both the existing collection and torrent.
 - **`phish-merge`** — Performs the actual merge in up to four phases: (1) rsync backup to NAS, (2) copy torrent-only shows, (3) replace matched shows with canonical torrent copies, (4) rename existing-only shows to torrent naming style. Supports `--dry-run` and `--phase N`.
 - **`phish-retag`** — Normalizes the album tag on every audio file in canonical show directories to `YYYY/MM/DD Venue, City, ST`, derived from the directory name, and normalizes the date tag to the show's date (`YYYY-MM-DD`). Venue/city boundaries resolve from existing tags when possible, falling back to livephish.com (jittered requests, results cached in `$XDG_CACHE_HOME/phish-retag.json`). Clean multi-set directories — distinct album tags differing only by a set marker (`I`-`V`) right after the date, with otherwise-matching venue text — get the marker converted to a `discnumber` tag and the album collapsed to the uniform format. Messier multi-set directories (contamination, missing markers, disagreeing venue text) are skipped with a warning. Only the album, discnumber, and date tags are touched. A directory whose files (count + newest mtime) haven't changed since the last run, and that was already fully correct (or unresolvable/anomalous), is skipped without opening any audio files; this skip never expires on its own (usage is bursty around tour season, so a calendar TTL wouldn't track anything real) — pass `--rescan` to force a fresh pass, e.g. after fixing a tag by hand. This scan-skip state lives in `$XDG_CACHE_HOME/phish-retag-state.json` (override with `--state`), separate from the location cache. Requires `mutagen`.
 
-All four tools share the same date-extraction logic, and the collection tools share these default paths:
-- `DEFAULT_EXISTING = /data/media/Sorted/Unsorted/Music/Phish`
-- `DEFAULT_TORRENT  = /data/torrents/Phish-Live.Phish.Project-2002-2026`
+All five tools share the same date-extraction logic (duplicated per-script, not imported — these are standalone scripts).
+
+Collection/intake paths resolve consistently across all five tools, in this order: explicit CLI argument > real environment variable > matching key in a `.env` file at the repo root (see `.env.example`) > hard-coded fallback (`phish-rename` has no fallback and requires one of the first three). The two env vars:
+- `PHISH_COLLECTION_DIR` — the existing/sorted collection root. Fallback: `/data/media/Sorted/Unsorted/Music/Phish`. Used by all five tools.
+- `PHISH_INTAKE_DIR` — the incoming-content root: the torrent directory for `phish-merge`/`phish-compare`, and the default zips directory for `phish-intake`. Fallback: `/data/torrents/Phish-Live.Phish.Project-2002-2026`.
+
+A `.env` file is loaded only to fill in variables not already set in the real shell environment, and is git-ignored — copy `.env.example` to `.env` and fill in your paths to avoid typing them on every invocation.
 
 Python deps: `pip install -r requirements.txt` (`requests`, `beautifulsoup4`, `mutagen`).
 
@@ -45,6 +50,10 @@ All sync scripts follow a common pattern:
 
 ### Phish Tools
 ```bash
+# Batch intake: unzip new show downloads, then rename + retag (prompts before each --execute)
+bin/phish-intake /path/to/zips --collection /path/to/collection
+bin/phish-intake --yes   # unattended, using PHISH_INTAKE_DIR / PHISH_COLLECTION_DIR
+
 # Rename new downloads to canonical format (dry run first)
 bin/phish-rename /data/torrents/Phish-Live.Phish.Project-2002-2026
 bin/phish-rename /data/torrents/Phish-Live.Phish.Project-2002-2026 --execute
@@ -114,12 +123,14 @@ bats music-sync.bats          # Integration tests (9 tests)
 bats --verbose-run *.bats     # Verbose output for debugging
 ```
 
-### Pytest Tests (Python bin/ tools — 244 tests)
+### Pytest Tests (Python bin/ tools — 312 tests)
 ```bash
 pytest tests/                        # Run all Python tests
 pytest tests/test_phish_rename.py    # Tests for phish-rename
 pytest tests/test_phish_merge.py     # Tests for phish-merge
 pytest tests/test_phish_retag.py     # Tests for phish-retag
+pytest tests/test_phish_compare.py   # Tests for phish-compare
+pytest tests/test_phish_intake.py    # Tests for phish-intake
 pytest -v tests/                     # Verbose output
 ```
 
@@ -155,6 +166,7 @@ Required external tools:
 ## File Structure
 
 - `bin/` — Phish collection Python tools and Borg backup scripts
+  - `phish-intake` — Unzip new show downloads and run them through phish-rename + phish-retag
   - `phish-rename` — Rename downloads to canonical LivePhish format
   - `phish-compare` — Compare existing collection vs torrent (read-only)
   - `phish-merge` — Merge torrent into existing collection
@@ -175,6 +187,7 @@ Required external tools:
   - `test_phish_*.py` — Pytest tests for bin/ tools
   - `test_helper.bash` — Bats test utilities
 - `requirements.txt` — Python dependencies for bin/ tools
+- `.env.example` — Template for `.env` (git-ignored); copy to `.env` and set `PHISH_COLLECTION_DIR`/`PHISH_INTAKE_DIR`
 
 ## Important Notes
 
@@ -182,5 +195,5 @@ Required external tools:
 - Scripts include interactive confirmation prompts to prevent accidental execution (can be skipped with `-y`)
 - The codebase prioritizes live shows over studio releases for Plex synchronization
 - Error handling uses `set -euo pipefail` in bash scripts for strict mode
-- The `bin/` tools use hard-coded default paths pointing to the owner's environment — override with CLI flags for other setups
+- The `bin/` tools default to the owner's environment via `PHISH_COLLECTION_DIR`/`PHISH_INTAKE_DIR` (env var or `.env`), falling back to hard-coded paths — override with CLI flags for other setups
 - `phish-rename` makes live HTTP requests to livephish.com; rate-limit awareness is built in (1-second delay between requests)
