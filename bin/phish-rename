@@ -17,6 +17,17 @@ is no LivePhish ID to build a canonical name from. In that case phish.net is
 queried as a courtesy to confirm the show and report its venue, purely for
 your manual research; it never drives a rename.
 
+Repeat runs skip directories that were already checked and haven't changed
+since (same name, same mtime) — a directory that previously came back "not
+found" or "location mismatch" is remembered and not re-queried against
+livephish.com. Since that skip never expires on its own (checking is bursty
+around tour season, not evenly spread over time, so a calendar-based
+expiry would just retrigger a network round trip for no reason tied to
+anything actually changing), pass --rescan when you specifically want a
+fresh check of everything — e.g. you know livephish.com has just added a
+release. State is cached in a small JSON file, separate from the directory
+contents, so this is safe to interrupt or run alongside other tools.
+
 Usage:
   phish-rename PATH
   phish-rename PATH --dry-run
@@ -26,6 +37,8 @@ Options:
   PATH          Directory containing show subdirectories (required)
   --dry-run     Print planned renames, touch nothing [default]
   --execute     Perform the actual renames
+  --rescan      Ignore cached skip results; re-check every directory
+  --state FILE  Skip-cache location [default: $XDG_CACHE_HOME/phish-rename-state.json]
   -h, --help    Show this message
 """
 
@@ -81,6 +94,30 @@ HEADERS = {
 }
 
 PHISHNET_URL = "https://phish.net/setlists/?d={date}"
+
+# ── Skip-state cache ───────────────────────────────────────────────────────────
+
+def default_state_path() -> Path:
+    base = os.environ.get("XDG_CACHE_HOME") or str(Path.home() / ".cache")
+    return Path(base) / "phish-rename-state.json"
+
+
+def load_state(path: Path) -> dict:
+    try:
+        with open(path) as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def save_state(path: Path, state: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    with open(tmp, "w") as f:
+        json.dump(state, f, indent=2, sort_keys=True)
+    tmp.replace(path)
+
 
 # ── Core functions ─────────────────────────────────────────────────────────────
 
@@ -223,13 +260,17 @@ def pick_best_match(candidates: list, dirname: str = None):
 
 # ── Main logic ─────────────────────────────────────────────────────────────────
 
-def main_logic(path: Path, dry_run: bool):
+def main_logic(path: Path, dry_run: bool, state_path: Path = None, rescan: bool = False):
     renamed = 0
     skipped_conforming = 0
     skipped_not_found = 0
     skipped_collision = 0
     skipped_unrecognized = 0
     skipped_location_mismatch = 0
+    skipped_cached = 0
+
+    state = load_state(state_path) if state_path is not None else {}
+    now = time.time()
 
     entries = sorted(path.iterdir(), key=lambda e: e.name.lower())
     for entry in entries:
@@ -245,13 +286,29 @@ def main_logic(path: Path, dry_run: bool):
             skipped_unrecognized += 1
             continue
 
+        mtime = entry.stat().st_mtime
+        cached = None if (state_path is None or rescan) else state.get(entry.name)
+        if cached and cached.get("mtime") == mtime:
+            status = cached.get("status")
+            if status in ("not_found", "location_mismatch", "collision"):
+                reason = status.replace("_", " ")
+                print(f"  {dim('SKIP')}      {entry.name} (cached — {reason})")
+                skipped_cached += 1
+                if status == "not_found":
+                    skipped_not_found += 1
+                elif status == "location_mismatch":
+                    skipped_location_mismatch += 1
+                else:
+                    skipped_collision += 1
+                continue
+
         try:
             html = search_livephish(date)
             time.sleep(0.5)
         except Exception as e:
             warn(entry.name, f"HTTP error — {e}")
             skipped_not_found += 1
-            continue
+            continue  # transient — don't cache, worth retrying next run
 
         candidates = parse_search_results(html, expected_date=date)
         match = pick_best_match(candidates, entry.name)
@@ -270,6 +327,8 @@ def main_logic(path: Path, dry_run: bool):
                 pass
             warn(entry.name, *lines)
             skipped_not_found += 1
+            if state_path is not None:
+                state[entry.name] = {"mtime": mtime, "checked_at": now, "status": "not_found"}
             continue
 
         release_id, location_raw = match
@@ -281,6 +340,8 @@ def main_logic(path: Path, dry_run: bool):
                 f"livephish.com match ({location_raw.strip()}, [{release_id}]) — needs manual review",
             )
             skipped_location_mismatch += 1
+            if state_path is not None:
+                state[entry.name] = {"mtime": mtime, "checked_at": now, "status": "location_mismatch"}
             continue
 
         location = location_to_dots(location_raw)
@@ -292,6 +353,8 @@ def main_logic(path: Path, dry_run: bool):
         if dst.exists():
             warn(entry.name, f"skipping — destination already exists ({new_name})")
             skipped_collision += 1
+            if state_path is not None:
+                state[entry.name] = {"mtime": mtime, "checked_at": now, "status": "collision"}
             continue
 
         if dry_run:
@@ -299,7 +362,13 @@ def main_logic(path: Path, dry_run: bool):
         else:
             print(f"  Renaming  {entry.name} → {new_name}")
             src.rename(dst)
+            state.pop(entry.name, None)
         renamed += 1
+
+    if state_path is not None:
+        current_names = {e.name for e in entries}
+        state = {k: v for k, v in state.items() if k in current_names}
+        save_state(state_path, state)
 
     print()
     print(f"  {bold('SUMMARY')}")
@@ -309,6 +378,8 @@ def main_logic(path: Path, dry_run: bool):
     print(f"  {yellow(str(skipped_collision))}  skipped (destination already exists)")
     print(f"  {yellow(str(skipped_location_mismatch))}  skipped (location mismatch — needs manual review)")
     print(f"  {dim(str(skipped_unrecognized))}  skipped (unrecognized format)")
+    if state_path is not None:
+        print(f"  {dim(str(skipped_cached))}  of the above skipped without a network request (cached)")
     print()
 
 
@@ -317,6 +388,8 @@ def main_logic(path: Path, dry_run: bool):
 def parse_args(argv):
     path = None
     dry_run = True
+    rescan = False
+    state_path = None
 
     args = argv[1:]
     i = 0
@@ -330,6 +403,15 @@ def parse_args(argv):
         elif args[i] == "--execute":
             dry_run = False
             i += 1
+        elif args[i] == "--rescan":
+            rescan = True
+            i += 1
+        elif args[i] == "--state":
+            if i + 1 >= len(args):
+                print("Error: --state requires a file argument", file=sys.stderr)
+                sys.exit(1)
+            state_path = Path(args[i + 1])
+            i += 2
         elif not args[i].startswith("-"):
             path = Path(args[i])
             i += 1
@@ -345,16 +427,20 @@ def parse_args(argv):
         print(f"Error: PATH does not exist: {path}", file=sys.stderr)
         sys.exit(1)
 
-    return path, dry_run
+    if state_path is None:
+        state_path = default_state_path()
+
+    return path, dry_run, rescan, state_path
 
 
 def main():
-    path, dry_run = parse_args(sys.argv)
+    path, dry_run, rescan, state_path = parse_args(sys.argv)
     mode = "DRY RUN" if dry_run else "EXECUTE"
     print(f"\n  {bold('PHISH RENAME')}  [{mode}]")
-    print(f"  {dim('Path:')}  {path}")
+    print(f"  {dim('Path:')}   {path}")
+    print(f"  {dim('State:')}  {state_path}")
     print()
-    main_logic(path, dry_run)
+    main_logic(path, dry_run, state_path=state_path, rescan=rescan)
 
 
 if __name__ == "__main__":

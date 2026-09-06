@@ -1,4 +1,6 @@
 import importlib.util
+import json
+import os
 import sys
 import pytest
 import tempfile
@@ -460,22 +462,101 @@ class TestMainLogic:
             assert (Path(tmp) / "2024-07-20 Xfinity Center Mansfield MA").exists()
 
 
+class TestStateCache:
+    def _make_dir(self, parent, name):
+        d = Path(parent) / name
+        d.mkdir()
+        return d
+
+    def test_not_found_result_is_cached_and_skips_network_on_rerun(self, capsys):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._make_dir(tmp, "Phish-1999-10-10.Albany.NY")
+            state_path = Path(tmp) / "state.json"
+            with patch.object(pr, "search_livephish", return_value=FIXTURE_HTML_NO_RESULTS) as mock_search:
+                with patch.object(pr, "fetch_phishnet_show", return_value=None):
+                    with patch("time.sleep"):
+                        pr.main_logic(Path(tmp), dry_run=True, state_path=state_path)
+                        assert mock_search.call_count == 1
+                        pr.main_logic(Path(tmp), dry_run=True, state_path=state_path)
+                        assert mock_search.call_count == 1  # second run used the cache
+            captured = capsys.readouterr()
+            assert "cached" in captured.out
+
+    def test_changed_directory_bypasses_cache(self, capsys):
+        with tempfile.TemporaryDirectory() as tmp:
+            d = self._make_dir(tmp, "Phish-1999-10-10.Albany.NY")
+            state_path = Path(tmp) / "state.json"
+            with patch.object(pr, "search_livephish", return_value=FIXTURE_HTML_NO_RESULTS) as mock_search:
+                with patch.object(pr, "fetch_phishnet_show", return_value=None):
+                    with patch("time.sleep"):
+                        pr.main_logic(Path(tmp), dry_run=True, state_path=state_path)
+                        # Touch the directory (e.g. a file was added inside it) to
+                        # bump its mtime — this must force a re-check.
+                        new_mtime = d.stat().st_mtime + 5
+                        os.utime(d, (new_mtime, new_mtime))
+                        pr.main_logic(Path(tmp), dry_run=True, state_path=state_path)
+            assert mock_search.call_count == 2
+
+    def test_rescan_ignores_cache(self, capsys):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._make_dir(tmp, "Phish-1999-10-10.Albany.NY")
+            state_path = Path(tmp) / "state.json"
+            with patch.object(pr, "search_livephish", return_value=FIXTURE_HTML_NO_RESULTS) as mock_search:
+                with patch.object(pr, "fetch_phishnet_show", return_value=None):
+                    with patch("time.sleep"):
+                        pr.main_logic(Path(tmp), dry_run=True, state_path=state_path)
+                        pr.main_logic(Path(tmp), dry_run=True, state_path=state_path, rescan=True)
+            assert mock_search.call_count == 2
+
+    def test_successful_rename_is_not_cached_as_a_skip(self, capsys):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._make_dir(tmp, "2024-07-20 Xfinity Center Mansfield MA")
+            state_path = Path(tmp) / "state.json"
+            with patch.object(pr, "search_livephish", return_value=FIXTURE_HTML_TWO_RESULTS):
+                with patch("time.sleep"):
+                    pr.main_logic(Path(tmp), dry_run=False, state_path=state_path)
+            state = json.loads(state_path.read_text())
+            assert state == {}
+
+    def test_no_state_path_disables_caching(self, capsys):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._make_dir(tmp, "Phish-1999-10-10.Albany.NY")
+            with patch.object(pr, "search_livephish", return_value=FIXTURE_HTML_NO_RESULTS) as mock_search:
+                with patch.object(pr, "fetch_phishnet_show", return_value=None):
+                    with patch("time.sleep"):
+                        pr.main_logic(Path(tmp), dry_run=True)
+                        pr.main_logic(Path(tmp), dry_run=True)
+            assert mock_search.call_count == 2
+
+
 class TestParseArgs:
     def test_path_and_dry_run_default(self):
         with tempfile.TemporaryDirectory() as tmp:
-            path, dry_run = pr.parse_args(["phish-rename", tmp])
+            path, dry_run, rescan, state_path = pr.parse_args(["phish-rename", tmp])
         assert str(path) == tmp
         assert dry_run is True
+        assert rescan is False
+        assert state_path == pr.default_state_path()
 
     def test_explicit_dry_run(self):
         with tempfile.TemporaryDirectory() as tmp:
-            _, dry_run = pr.parse_args(["phish-rename", tmp, "--dry-run"])
+            _, dry_run, _, _ = pr.parse_args(["phish-rename", tmp, "--dry-run"])
         assert dry_run is True
 
     def test_execute_flag(self):
         with tempfile.TemporaryDirectory() as tmp:
-            _, dry_run = pr.parse_args(["phish-rename", tmp, "--execute"])
+            _, dry_run, _, _ = pr.parse_args(["phish-rename", tmp, "--execute"])
         assert dry_run is False
+
+    def test_rescan_flag(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            _, _, rescan, _ = pr.parse_args(["phish-rename", tmp, "--rescan"])
+        assert rescan is True
+
+    def test_state_flag(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            _, _, _, state_path = pr.parse_args(["phish-rename", tmp, "--state", "/tmp/x.json"])
+        assert state_path == Path("/tmp/x.json")
 
     def test_missing_path_exits(self):
         with pytest.raises(SystemExit):

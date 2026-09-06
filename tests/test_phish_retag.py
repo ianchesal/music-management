@@ -736,6 +736,85 @@ class TestMainLogic:
                           "multiset_anomaly": 0, "unresolved": 0, "skipped": 1}
 
 
+class TestStateCache:
+    def _run(self, root, cache_file, state_file, execute, rescan=False):
+        with patch.object(pt, "livephish_location", return_value=None):
+            return pt.main_logic(root, execute=execute, cache_path=cache_file,
+                                  state_path=state_file, rescan=rescan)
+
+    def _correct_show(self, audio_fixtures, root):
+        d = root / "Phish-2026-07-12.Ruoff.Music.Center.Noblesville.IN.[2754]"
+        make_show_file(audio_fixtures, d, "t1.flac",
+                       album="2026/07/12 Ruoff Music Center, Noblesville, IN",
+                       date="2026-07-12")
+        return d
+
+    def test_already_correct_dir_skips_tag_reads_on_rerun(self, audio_fixtures, tmp_path):
+        root = tmp_path / "col"
+        self._correct_show(audio_fixtures, root)
+        cache_file, state_file = tmp_path / "c.json", tmp_path / "s.json"
+        counts = self._run(root, cache_file, state_file, execute=False)
+        assert counts["already"] == 1
+        with patch.object(pt, "read_album") as mock_read:
+            counts = self._run(root, cache_file, state_file, execute=False)
+        mock_read.assert_not_called()
+        assert counts["already"] == 1
+
+    def test_changed_directory_bypasses_cache(self, audio_fixtures, tmp_path):
+        root = tmp_path / "col"
+        d = self._correct_show(audio_fixtures, root)
+        cache_file, state_file = tmp_path / "c.json", tmp_path / "s.json"
+        self._run(root, cache_file, state_file, execute=False)
+        make_show_file(audio_fixtures, d, "t2.flac",
+                       album="2026/07/12 Ruoff Music Center, Noblesville, IN",
+                       date="2026-07-12")
+        with patch.object(pt, "read_album") as mock_read:
+            mock_read.return_value = "2026/07/12 Ruoff Music Center, Noblesville, IN"
+            self._run(root, cache_file, state_file, execute=False)
+        mock_read.assert_called()
+
+    def test_rescan_ignores_cache(self, audio_fixtures, tmp_path):
+        root = tmp_path / "col"
+        self._correct_show(audio_fixtures, root)
+        cache_file, state_file = tmp_path / "c.json", tmp_path / "s.json"
+        self._run(root, cache_file, state_file, execute=False)
+        with patch.object(pt, "read_album") as mock_read:
+            mock_read.return_value = "2026/07/12 Ruoff Music Center, Noblesville, IN"
+            self._run(root, cache_file, state_file, execute=False, rescan=True)
+        mock_read.assert_called()
+
+    def test_dry_run_pending_update_is_not_cached(self, audio_fixtures, tmp_path):
+        root = tmp_path / "col"
+        d1, *_ = build_collection(audio_fixtures, root)
+        cache_file, state_file = tmp_path / "c.json", tmp_path / "s.json"
+        self._run(root, cache_file, state_file, execute=False)
+        with patch.object(pt, "read_album") as mock_read:
+            mock_read.return_value = "Phish - Phish - 2026_07_21 Syracuse, NY (Phis)"
+            self._run(root, cache_file, state_file, execute=False)
+        mock_read.assert_called()
+
+    def test_execute_caches_result_as_already(self, audio_fixtures, tmp_path):
+        root = tmp_path / "col"
+        d1, *_ = build_collection(audio_fixtures, root)
+        cache_file, state_file = tmp_path / "c.json", tmp_path / "s.json"
+        self._run(root, cache_file, state_file, execute=True)
+        with patch.object(pt, "read_album") as mock_read:
+            counts = self._run(root, cache_file, state_file, execute=False)
+        mock_read.assert_not_called()
+        assert counts["already"] >= 1
+
+    def test_no_state_path_disables_caching(self, audio_fixtures, tmp_path):
+        root = tmp_path / "col"
+        self._correct_show(audio_fixtures, root)
+        cache_file = tmp_path / "c.json"
+        with patch.object(pt, "livephish_location", return_value=None):
+            pt.main_logic(root, execute=False, cache_path=cache_file)
+            with patch.object(pt, "read_album") as mock_read:
+                mock_read.return_value = "2026/07/12 Ruoff Music Center, Noblesville, IN"
+                pt.main_logic(root, execute=False, cache_path=cache_file)
+        mock_read.assert_called()
+
+
 class TestDateNormalization:
     def _run(self, root, cache_file, execute):
         with patch.object(pt, "livephish_location", return_value=None):
@@ -797,19 +876,29 @@ class TestDateNormalization:
 
 class TestParseArgs:
     def test_defaults(self):
-        path, execute, cache = pt.parse_args(["phish-retag"])
+        path, execute, cache, state, rescan = pt.parse_args(["phish-retag"])
         assert path == pt.DEFAULT_PATH
         assert execute is False
         assert cache == pt.default_cache_path()
+        assert state == pt.default_state_path()
+        assert rescan is False
 
     def test_positional_path_and_execute(self, tmp_path):
-        path, execute, cache = pt.parse_args(["phish-retag", str(tmp_path), "--execute"])
+        path, execute, *_ = pt.parse_args(["phish-retag", str(tmp_path), "--execute"])
         assert path == tmp_path
         assert execute is True
 
     def test_cache_flag(self, tmp_path):
-        _, _, cache = pt.parse_args(["phish-retag", str(tmp_path), "--cache", "/tmp/x.json"])
+        _, _, cache, _, _ = pt.parse_args(["phish-retag", str(tmp_path), "--cache", "/tmp/x.json"])
         assert cache == Path("/tmp/x.json")
+
+    def test_state_flag(self, tmp_path):
+        _, _, _, state, _ = pt.parse_args(["phish-retag", str(tmp_path), "--state", "/tmp/s.json"])
+        assert state == Path("/tmp/s.json")
+
+    def test_rescan_flag(self, tmp_path):
+        *_, rescan = pt.parse_args(["phish-retag", str(tmp_path), "--rescan"])
+        assert rescan is True
 
     def test_unknown_flag_exits(self, tmp_path):
         with pytest.raises(SystemExit):
