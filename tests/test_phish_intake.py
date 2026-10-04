@@ -36,22 +36,22 @@ def make_zip(path: Path, names):
     return path
 
 
-class TestZipCommonTopLevel:
+class TestArchiveCommonTopLevel:
     def test_single_top_level_dir(self, tmp_path):
         z = make_zip(tmp_path / "a.zip", ["Show/one.flac", "Show/two.flac"])
-        assert pi.zip_common_top_level(z) == "Show"
+        assert pi.archive_common_top_level(z) == "Show"
 
     def test_loose_files_have_no_common_dir(self, tmp_path):
         z = make_zip(tmp_path / "a.zip", ["one.flac", "two.flac"])
-        assert pi.zip_common_top_level(z) is None
+        assert pi.archive_common_top_level(z) is None
 
     def test_two_top_level_dirs_have_no_common_dir(self, tmp_path):
         z = make_zip(tmp_path / "a.zip", ["Show/one.flac", "Other/two.flac"])
-        assert pi.zip_common_top_level(z) is None
+        assert pi.archive_common_top_level(z) is None
 
     def test_explicit_empty_dir_entry_only(self, tmp_path):
         z = make_zip(tmp_path / "a.zip", ["Show/"])
-        assert pi.zip_common_top_level(z) == "Show"
+        assert pi.archive_common_top_level(z) == "Show"
 
 
 class TestDateFromDirname:
@@ -98,28 +98,28 @@ class TestPlanExtraction:
         assert plan.action == "skip_exists"
 
 
-class TestExtractZip:
+class TestExtractArchive:
     def test_extracts_common_dir_as_is(self, tmp_path):
         z = make_zip(tmp_path / "a.zip", ["Phish-2026-07-12.Venue/one.flac"])
         collection = tmp_path / "collection"
         collection.mkdir()
-        pi.extract_zip(z, collection, "Phish-2026-07-12.Venue")
+        pi.extract_archive(z, collection, "Phish-2026-07-12.Venue")
         assert (collection / "Phish-2026-07-12.Venue" / "one.flac").exists()
 
     def test_extracts_loose_files_into_derived_dir(self, tmp_path):
         z = make_zip(tmp_path / "Phish-2026-07-12.Venue.zip", ["one.flac"])
         collection = tmp_path / "collection"
         collection.mkdir()
-        pi.extract_zip(z, collection, "Phish-2026-07-12.Venue")
+        pi.extract_archive(z, collection, "Phish-2026-07-12.Venue")
         assert (collection / "Phish-2026-07-12.Venue" / "one.flac").exists()
 
 
-class TestFindZips:
+class TestFindArchives:
     def test_returns_sorted_zip_files_only(self, tmp_path):
         (tmp_path / "b.zip").write_bytes(b"")
         (tmp_path / "a.zip").write_bytes(b"")
         (tmp_path / "notes.txt").write_bytes(b"")
-        assert [p.name for p in pi.find_zips(tmp_path)] == ["a.zip", "b.zip"]
+        assert [p.name for p in pi.find_archives(tmp_path)] == ["a.zip", "b.zip"]
 
 
 class TestCollectionScan:
@@ -214,7 +214,7 @@ class TestParseArgs:
             pi.parse_args(["phish-intake"])
 
 
-class TestIntakeZips:
+class TestIntakeArchives:
     def test_extracts_valid_zip_and_skips_dateless_one(self, tmp_path, capsys):
         zips_dir = tmp_path / "zips"
         zips_dir.mkdir()
@@ -223,10 +223,10 @@ class TestIntakeZips:
         make_zip(zips_dir / "Phish-2026-07-12.Venue.zip", ["one.flac"])
         make_zip(zips_dir / "no-date.zip", ["two.flac"])
 
-        results = pi.intake_zips(zips_dir, collection)
+        results = pi.intake_archives(zips_dir, collection)
 
         assert (collection / "Phish-2026-07-12.Venue" / "one.flac").exists()
-        actions = {r.zip_path.name: r.plan.action for r in results}
+        actions = {r.archive_path.name: r.plan.action for r in results}
         assert actions["Phish-2026-07-12.Venue.zip"] == "extract"
         assert actions["no-date.zip"] == "skip_no_date"
 
@@ -238,8 +238,180 @@ class TestIntakeZips:
         make_zip(zips_dir / "a-2026-07-12.zip", ["Phish-2026-07-12.Venue/one.flac"])
         make_zip(zips_dir / "b-2026-07-12.zip", ["Phish-2026-07-12.Venue.Dupe/two.flac"])
 
-        results = pi.intake_zips(zips_dir, collection)
+        results = pi.intake_archives(zips_dir, collection)
 
-        actions = {r.zip_path.name: r.plan.action for r in results}
+        actions = {r.archive_path.name: r.plan.action for r in results}
         assert actions["a-2026-07-12.zip"] == "extract"
         assert actions["b-2026-07-12.zip"] == "skip_exists"
+
+
+# ── RAR support ────────────────────────────────────────────────────────────────
+
+class FakeUnrar:
+    """Stands in for the unrar binary: `vt` prints a technical listing of the
+    configured entries, `x` writes them under the destination directory."""
+
+    def __init__(self, entries, fail_extract=False):
+        self.entries = entries  # list of (name, is_dir)
+        self.fail_extract = fail_extract
+        self.calls = []
+
+    def __call__(self, *args):
+        self.calls.append(args)
+        if args[0] == "vt":
+            lines = ["", "UNRAR 7.12 freeware", "", f"Archive: {args[-1]}", "Details: RAR 5", ""]
+            for name, is_dir in self.entries:
+                lines += [f"        Name: {name}", f"        Type: {'Directory' if is_dir else 'File'}", ""]
+            return MagicMock(returncode=0, stdout="\n".join(lines), stderr="")
+        if args[0] == "x":
+            if self.fail_extract:
+                return MagicMock(returncode=3, stdout="", stderr="CRC failed")
+            dest = Path(args[-1])
+            for name, is_dir in self.entries:
+                target = dest / name
+                if is_dir:
+                    target.mkdir(parents=True, exist_ok=True)
+                else:
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_text("data")
+            return MagicMock(returncode=0, stdout="", stderr="")
+        raise AssertionError(f"unexpected unrar call {args}")
+
+
+@pytest.fixture
+def fake_unrar(monkeypatch):
+    def install(entries, fail_extract=False):
+        fake = FakeUnrar(entries, fail_extract)
+        monkeypatch.setattr(pi, "_unrar", fake)
+        monkeypatch.setattr(pi, "unrar_available", lambda: True)
+        return fake
+    return install
+
+
+class TestRarCommonTopLevel:
+    def test_single_top_level_dir(self, tmp_path, fake_unrar):
+        fake_unrar([("Show", True), ("Show/one.flac", False)])
+        assert pi.archive_common_top_level(tmp_path / "a.rar") == "Show"
+
+    def test_dir_entry_only(self, tmp_path, fake_unrar):
+        fake_unrar([("Show", True)])
+        assert pi.archive_common_top_level(tmp_path / "a.rar") == "Show"
+
+    def test_loose_files_have_no_common_dir(self, tmp_path, fake_unrar):
+        fake_unrar([("one.flac", False), ("two.flac", False)])
+        assert pi.archive_common_top_level(tmp_path / "a.rar") is None
+
+    def test_two_top_level_dirs_have_no_common_dir(self, tmp_path, fake_unrar):
+        fake_unrar([("Show/one.flac", False), ("Other/two.flac", False)])
+        assert pi.archive_common_top_level(tmp_path / "a.rar") is None
+
+
+class TestRarExtraction:
+    def test_extracts_common_dir_as_is(self, tmp_path, fake_unrar):
+        fake_unrar([("Phish-2026-07-12.Venue/one.flac", False)])
+        collection = tmp_path / "collection"
+        collection.mkdir()
+        pi.extract_archive(tmp_path / "a.rar", collection, "Phish-2026-07-12.Venue")
+        assert (collection / "Phish-2026-07-12.Venue" / "one.flac").exists()
+
+    def test_extracts_loose_files_into_derived_dir(self, tmp_path, fake_unrar):
+        fake = fake_unrar([("one.flac", False)])
+        collection = tmp_path / "collection"
+        collection.mkdir()
+        pi.extract_archive(tmp_path / "Phish-2026-07-12.Venue.rar", collection, "Phish-2026-07-12.Venue")
+        assert (collection / "Phish-2026-07-12.Venue" / "one.flac").exists()
+        extract_call = [c for c in fake.calls if c[0] == "x"][0]
+        assert "-o-" in extract_call  # never overwrite
+
+    def test_failed_extraction_raises(self, tmp_path, fake_unrar):
+        fake_unrar([("one.flac", False)], fail_extract=True)
+        collection = tmp_path / "collection"
+        collection.mkdir()
+        with pytest.raises(pi.ExtractionError, match="CRC failed"):
+            pi.extract_archive(tmp_path / "Phish-2026-07-12.Venue.rar", collection, "Phish-2026-07-12.Venue")
+
+
+class TestRarPlanExtraction:
+    def test_multipart_target_drops_part_suffix(self, tmp_path, fake_unrar):
+        fake_unrar([("one.flac", False)])
+        plan = pi.plan_extraction(
+            tmp_path / "Phish-2026-07-12.Venue.part1.rar", existing_dirnames=set(), existing_dates=set()
+        )
+        assert plan.action == "extract"
+        assert plan.target_dirname == "Phish-2026-07-12.Venue"
+
+    def test_skips_when_unrar_missing(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(pi, "unrar_available", lambda: False)
+        plan = pi.plan_extraction(
+            tmp_path / "Phish-2026-07-12.Venue.rar", existing_dirnames=set(), existing_dates=set()
+        )
+        assert plan.action == "skip_no_unrar"
+
+
+class TestFindArchivesRar:
+    def test_includes_rar_and_only_first_multipart_volume(self, tmp_path):
+        for name in [
+            "a.zip", "b.rar", "b.r00", "b.r01",
+            "c.part1.rar", "c.part2.rar",
+            "d.part01.rar", "d.part02.rar", "d.part10.rar",
+            "notes.txt",
+        ]:
+            (tmp_path / name).write_bytes(b"")
+        assert [p.name for p in pi.find_archives(tmp_path)] == [
+            "a.zip", "b.rar", "c.part1.rar", "d.part01.rar",
+        ]
+
+
+class TestArchiveVolumes:
+    def test_zip_is_single_volume(self, tmp_path):
+        z = tmp_path / "a.zip"
+        z.write_bytes(b"")
+        assert pi.archive_volumes(z) == [z]
+
+    def test_old_style_rar_volumes(self, tmp_path):
+        for name in ["b.rar", "b.r00", "b.r01", "bb.r00"]:
+            (tmp_path / name).write_bytes(b"")
+        assert [p.name for p in pi.archive_volumes(tmp_path / "b.rar")] == ["b.rar", "b.r00", "b.r01"]
+
+    def test_new_style_rar_volumes(self, tmp_path):
+        for name in ["c.part01.rar", "c.part02.rar", "c.part10.rar", "cc.part02.rar"]:
+            (tmp_path / name).write_bytes(b"")
+        assert [p.name for p in pi.archive_volumes(tmp_path / "c.part01.rar")] == [
+            "c.part01.rar", "c.part02.rar", "c.part10.rar",
+        ]
+
+
+class TestIntakeArchivesRar:
+    def test_extracts_rar_alongside_zip(self, tmp_path, fake_unrar):
+        zips_dir = tmp_path / "zips"
+        zips_dir.mkdir()
+        collection = tmp_path / "collection"
+        collection.mkdir()
+        make_zip(zips_dir / "Phish-2026-07-12.Venue.zip", ["one.flac"])
+        (zips_dir / "Phish-2026-07-14.Other.rar").write_bytes(b"")
+        fake_unrar([("two.flac", False)])
+
+        results = pi.intake_archives(zips_dir, collection)
+
+        actions = {r.archive_path.name: r.plan.action for r in results}
+        assert actions == {
+            "Phish-2026-07-12.Venue.zip": "extract",
+            "Phish-2026-07-14.Other.rar": "extract",
+        }
+        assert (collection / "Phish-2026-07-14.Other" / "two.flac").exists()
+
+    def test_failed_extraction_is_reported_and_batch_continues(self, tmp_path, fake_unrar, capsys):
+        zips_dir = tmp_path / "zips"
+        zips_dir.mkdir()
+        collection = tmp_path / "collection"
+        collection.mkdir()
+        (zips_dir / "Phish-2026-07-12.Venue.rar").write_bytes(b"")
+        make_zip(zips_dir / "Phish-2026-07-14.Other.zip", ["one.flac"])
+        fake_unrar([("two.flac", False)], fail_extract=True)
+
+        results = pi.intake_archives(zips_dir, collection)
+
+        actions = {r.archive_path.name: r.plan.action for r in results}
+        assert actions["Phish-2026-07-12.Venue.rar"] == "error"
+        assert actions["Phish-2026-07-14.Other.zip"] == "extract"
+        assert "FAILED" in capsys.readouterr().out

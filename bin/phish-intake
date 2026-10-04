@@ -1,19 +1,26 @@
 #!/usr/bin/env python3
 """
-phish-intake — Unzip new Phish show downloads and run them through
-phish-rename and phish-retag in one pass.
+phish-intake — Unpack new Phish show downloads (zip or rar) and run them
+through phish-rename and phish-retag in one pass.
 
-For each *.zip in ZIPDIR: if the zip's contents already share a single
-top-level directory, it's extracted into COLLECTION as-is; otherwise (loose
-files at the top level) a directory is created from the zip's own filename
-and the contents are extracted into it — the same naming convention you'd
-use by hand, so phish-rename picks it up on the next step. A zip whose name
-carries no recognizable date, or whose show already exists in the
-collection, is skipped with a warning.
+For each *.zip / *.rar in ZIPDIR: if the archive's contents already share a
+single top-level directory, it's extracted into COLLECTION as-is; otherwise
+(loose files at the top level) a directory is created from the archive's own
+filename and the contents are extracted into it — the same naming convention
+you'd use by hand, so phish-rename picks it up on the next step. An archive
+whose name carries no recognizable date, or whose show already exists in the
+collection, is skipped with a warning. An archive that fails to extract is
+reported, any partial extraction is removed, and the batch carries on.
+
+RAR archives need the `unrar` binary on PATH (they're skipped with a warning
+if it's missing). Multi-volume sets (Show.part1.rar, Show.part2.rar, ... or
+Show.rar, Show.r00, Show.r01, ...) are extracted once from their first
+volume, and the directory name drops any .partN suffix.
 
 After extraction, phish-rename and phish-retag are each run once (dry-run,
 then, on confirmation, --execute) over the whole collection. Finally, for
-each zip that was successfully extracted, you're asked whether to delete it.
+each archive that was successfully extracted, you're asked whether to delete
+it (every volume, for a multi-volume rar).
 
 Usage:
   phish-intake [ZIPDIR] [--collection PATH] [--yes]
@@ -23,14 +30,15 @@ $PHISH_COLLECTION_DIR respectively (or the matching keys in a .env file at
 the repo root, if the real environment variables aren't set).
 
 Options:
-  ZIPDIR            Directory containing show zip files [default: $PHISH_INTAKE_DIR]
+  ZIPDIR            Directory containing show zip/rar files [default: $PHISH_INTAKE_DIR]
   --collection PATH Existing collection directory [default: $PHISH_COLLECTION_DIR]
-  --yes             Don't prompt; execute rename/retag and delete zips automatically
+  --yes             Don't prompt; execute rename/retag and delete archives automatically
   -h, --help        Show this message
 """
 
 import os
 import re
+import shutil
 import subprocess
 import sys
 import zipfile
@@ -73,24 +81,103 @@ def default_intake_path():
     return Path(value) if value else None
 
 
-# ── Zip inspection ─────────────────────────────────────────────────────────────
+# ── Archive inspection ─────────────────────────────────────────────────────────
 
-def zip_common_top_level(zip_path: Path):
-    """Return the single shared top-level path component of every entry in
-    zip_path, or None if entries are loose or span more than one directory."""
+# Multi-volume RAR sets come in two naming styles: "Show.part1.rar",
+# "Show.part2.rar", ... and the older "Show.rar", "Show.r00", "Show.r01", ...
+# Either way, only the first volume is treated as the archive — unrar follows
+# the rest of the set on its own.
+PART_RE = re.compile(r'^(?P<base>.+)\.part(?P<num>\d+)\.rar$', re.IGNORECASE)
+
+
+class ExtractionError(Exception):
+    pass
+
+
+def is_rar(path: Path) -> bool:
+    return path.suffix.lower() == ".rar"
+
+
+def unrar_available() -> bool:
+    return shutil.which("unrar") is not None
+
+
+def _unrar(*args):
+    # -p- never prompts for a password, so an encrypted archive fails instead of hanging.
+    return subprocess.run(["unrar", *args], capture_output=True, text=True)
+
+
+def _unrar_error(proc) -> str:
+    """unrar's error output on one line, with repeated messages collapsed."""
+    lines = (line.strip(" -") for line in (proc.stderr or proc.stdout).splitlines())
+    return "; ".join(dict.fromkeys(line for line in lines if line)) or f"unrar exited {proc.returncode}"
+
+
+def _rar_entries(rar_path: Path):
+    """Return (name, is_dir) for every entry, parsed from unrar's technical listing."""
+    proc = _unrar("vt", "-p-", str(rar_path))
+    if proc.returncode != 0:
+        raise ExtractionError(f"unrar could not list it: {_unrar_error(proc)}")
+    entries = []
+    name = None
+    for line in proc.stdout.splitlines():
+        line = line.strip()
+        if line.startswith("Name: "):
+            name = line[len("Name: "):]
+        elif line.startswith("Type: ") and name is not None:
+            entries.append((name, line[len("Type: "):] == "Directory"))
+            name = None
+    return entries
+
+
+def _zip_entries(zip_path: Path):
     with zipfile.ZipFile(zip_path) as zf:
-        tops = set()
-        for name in zf.namelist():
-            if not name.strip("/"):
-                continue
-            if "/" in name.rstrip("/"):
-                tops.add(name.split("/", 1)[0])
-            elif name.endswith("/"):
-                tops.add(name.rstrip("/"))
-            else:
-                # A loose file sitting at the zip's root — no common directory.
-                return None
+        return [(name.rstrip("/"), name.endswith("/")) for name in zf.namelist()]
+
+
+def archive_common_top_level(archive_path: Path):
+    """Return the single shared top-level path component of every entry in
+    archive_path, or None if entries are loose or span more than one directory."""
+    entries = _rar_entries(archive_path) if is_rar(archive_path) else _zip_entries(archive_path)
+    tops = set()
+    for name, is_dir in entries:
+        name = name.strip("/")
+        if not name:
+            continue
+        if "/" in name:
+            tops.add(name.split("/", 1)[0])
+        elif is_dir:
+            tops.add(name)
+        else:
+            # A loose file sitting at the archive's root — no common directory.
+            return None
     return tops.pop() if len(tops) == 1 else None
+
+
+def archive_stem(archive_path: Path) -> str:
+    """The archive's name without its extension or multi-volume part suffix."""
+    m = PART_RE.match(archive_path.name)
+    return m.group("base") if m else archive_path.stem
+
+
+def archive_volumes(archive_path: Path):
+    """Every file belonging to archive_path: just itself for a zip or a
+    single-volume rar, the whole set for a multi-volume rar."""
+    if not is_rar(archive_path):
+        return [archive_path]
+    parent = archive_path.parent
+    m = PART_RE.match(archive_path.name)
+    if m:
+        base = m.group("base")
+        parts = []
+        for p in parent.iterdir():
+            pm = PART_RE.match(p.name)
+            if pm and pm.group("base") == base:
+                parts.append((int(pm.group("num")), p))
+        return [p for _, p in sorted(parts)]
+    old_style = re.compile(re.escape(archive_path.stem) + r'\.r\d{2,}$', re.IGNORECASE)
+    extra = sorted(p for p in parent.iterdir() if old_style.match(p.name))
+    return [archive_path, *extra]
 
 
 def date_from_dirname(dirname: str):
@@ -104,13 +191,16 @@ def date_from_dirname(dirname: str):
 ExtractionPlan = namedtuple("ExtractionPlan", ["action", "target_dirname", "reason"])
 
 
-def plan_extraction(zip_path: Path, existing_dirnames: set, existing_dates: set) -> ExtractionPlan:
-    top = zip_common_top_level(zip_path)
-    target = top if top is not None else zip_path.stem
+def plan_extraction(archive_path: Path, existing_dirnames: set, existing_dates: set) -> ExtractionPlan:
+    if is_rar(archive_path) and not unrar_available():
+        return ExtractionPlan("skip_no_unrar", None, "unrar is not installed")
+
+    top = archive_common_top_level(archive_path)
+    target = top if top is not None else archive_stem(archive_path)
 
     date = date_from_dirname(target)
     if date is None:
-        return ExtractionPlan("skip_no_date", None, f"no date found in {zip_path.name}")
+        return ExtractionPlan("skip_no_date", None, f"no date found in {archive_path.name}")
 
     if target in existing_dirnames:
         return ExtractionPlan("skip_exists", target, f"{target} already exists in the collection")
@@ -121,18 +211,37 @@ def plan_extraction(zip_path: Path, existing_dirnames: set, existing_dates: set)
     return ExtractionPlan("extract", target, None)
 
 
-def extract_zip(zip_path: Path, collection_dir: Path, target_dirname: str):
-    top = zip_common_top_level(zip_path)
+def extract_archive(archive_path: Path, collection_dir: Path, target_dirname: str):
+    top = archive_common_top_level(archive_path)
     dest_root = collection_dir if top is not None else collection_dir / target_dirname
     dest_root.mkdir(parents=True, exist_ok=True)
-    with zipfile.ZipFile(zip_path) as zf:
-        zf.extractall(dest_root)
+    if is_rar(archive_path):
+        # -o- never overwrites; the trailing slash marks dest_root as the extraction directory.
+        proc = _unrar("x", "-o-", "-p-", str(archive_path), f"{dest_root}/")
+        if proc.returncode != 0:
+            raise ExtractionError(_unrar_error(proc))
+    else:
+        with zipfile.ZipFile(archive_path) as zf:
+            zf.extractall(dest_root)
 
 
 # ── Directory scanning ───────────────────────────────────────────────────────────
 
-def find_zips(zips_dir: Path):
-    return sorted(zips_dir.glob("*.zip"))
+def find_archives(archives_dir: Path):
+    """Every *.zip and *.rar in archives_dir, counting a multi-volume rar set once
+    (by its first volume)."""
+    archives = []
+    for p in archives_dir.iterdir():
+        if not p.is_file():
+            continue
+        suffix = p.suffix.lower()
+        if suffix == ".zip":
+            archives.append(p)
+        elif suffix == ".rar":
+            m = PART_RE.match(p.name)
+            if m is None or int(m.group("num")) == 1:
+                archives.append(p)
+    return sorted(archives)
 
 
 def collection_dirnames(collection_dir: Path) -> set:
@@ -145,25 +254,38 @@ def collection_dates(dirnames: set) -> set:
     return dates
 
 
-IntakeResult = namedtuple("IntakeResult", ["zip_path", "plan"])
+IntakeResult = namedtuple("IntakeResult", ["archive_path", "plan"])
 
 
-def intake_zips(zips_dir: Path, collection_dir: Path):
+def intake_archives(archives_dir: Path, collection_dir: Path):
     dirnames = collection_dirnames(collection_dir)
     dates = collection_dates(dirnames)
     results = []
-    for zip_path in find_zips(zips_dir):
-        plan = plan_extraction(zip_path, dirnames, dates)
+    for archive_path in find_archives(archives_dir):
+        plan = None
+        try:
+            plan = plan_extraction(archive_path, dirnames, dates)
+            if plan.action == "extract":
+                extract_archive(archive_path, collection_dir, plan.target_dirname)
+        except (ExtractionError, zipfile.BadZipFile) as e:
+            # The plan only extracts into a directory that didn't exist yet, so
+            # anything left there is a partial extraction and safe to remove.
+            if plan is not None and plan.action == "extract":
+                shutil.rmtree(collection_dir / plan.target_dirname, ignore_errors=True)
+            plan = ExtractionPlan("error", None, str(e))
+            print(f"  FAILED     {archive_path.name} ({e})")
+            results.append(IntakeResult(archive_path, plan))
+            continue
+
         if plan.action == "extract":
-            extract_zip(zip_path, collection_dir, plan.target_dirname)
             dirnames.add(plan.target_dirname)
             date = date_from_dirname(plan.target_dirname)
             if date:
                 dates.add(date)
-            print(f"  extracted  {zip_path.name} -> {plan.target_dirname}")
+            print(f"  extracted  {archive_path.name} -> {plan.target_dirname}")
         else:
-            print(f"  SKIP       {zip_path.name} ({plan.reason})")
-        results.append(IntakeResult(zip_path, plan))
+            print(f"  SKIP       {archive_path.name} ({plan.reason})")
+        results.append(IntakeResult(archive_path, plan))
     return results
 
 
@@ -230,7 +352,7 @@ def main():
     print(f"\n  Zips:       {zips_dir}")
     print(f"  Collection: {collection_dir}\n")
 
-    results = intake_zips(zips_dir, collection_dir)
+    results = intake_archives(zips_dir, collection_dir)
     extracted = [r for r in results if r.plan.action == "extract"]
 
     if not extracted:
@@ -249,8 +371,13 @@ def main():
 
     print()
     for result in extracted:
-        if auto_yes or confirm(f"Delete {result.zip_path.name}?"):
-            result.zip_path.unlink()
+        volumes = archive_volumes(result.archive_path)
+        label = result.archive_path.name
+        if len(volumes) > 1:
+            label += f" (+{len(volumes) - 1} more volume(s))"
+        if auto_yes or confirm(f"Delete {label}?"):
+            for volume in volumes:
+                volume.unlink()
 
 
 if __name__ == "__main__":

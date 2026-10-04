@@ -17,7 +17,7 @@ This is a collection of music management tools for handling live show collection
 
 Four Python tools designed to work together as a pipeline when integrating new Phish downloads (a LivePhish torrent, or individual show zips) with an existing collection, plus a standalone tag normalizer:
 
-- **`phish-intake`** — Batch entry point for the common tour-season workflow: unzip a batch of downloaded show zips, then run them through `phish-rename` and `phish-retag`. For each `*.zip` in a zips directory, if the zip's contents already share one common top-level directory it's extracted into the collection as-is; if the zip holds loose files at the top level, a directory is created from the zip's own filename (the same convention you'd use naming it by hand) and the contents extracted into that. A zip whose name carries no recognizable date, or whose show (by directory name or by date) already exists in the collection, is skipped with a warning — nothing is guessed. After extraction, `phish-rename` and `phish-retag` are each run once (dry-run, then, on confirmation, `--execute`) over the whole collection — not per-zip, since both tools already skip directories that haven't changed. Finally, for each zip that was successfully extracted, you're asked whether to delete it. Pass `--yes` to skip all confirmation prompts (execute steps and zip deletion) for unattended batch runs.
+- **`phish-intake`** — Batch entry point for the common tour-season workflow: unpack a batch of downloaded show archives (`.zip` or `.rar`), then run them through `phish-rename` and `phish-retag`. For each archive in the zips directory, if its contents already share one common top-level directory it's extracted into the collection as-is; if it holds loose files at the top level, a directory is created from the archive's own filename (the same convention you'd use naming it by hand) and the contents extracted into that. An archive whose name carries no recognizable date, or whose show (by directory name or by date) already exists in the collection, is skipped with a warning — nothing is guessed. An archive that fails to list or extract (corrupt, missing volume, password-protected) is reported, any partial extraction is removed, and the batch continues. RAR support shells out to the `unrar` binary (rars are skipped with a warning if it isn't installed); multi-volume sets (`Show.part1.rar`, `Show.part2.rar`, … or `Show.rar`, `Show.r00`, …) are extracted once from the first volume, the directory name drops any `.partN` suffix, and deletion removes every volume. After extraction, `phish-rename` and `phish-retag` are each run once (dry-run, then, on confirmation, `--execute`) over the whole collection — not per-archive, since both tools already skip directories that haven't changed. Finally, for each archive that was successfully extracted, you're asked whether to delete it. Pass `--yes` to skip all confirmation prompts (execute steps and archive deletion) for unattended batch runs.
 - **`phish-rename`** — Queries livephish.com to rename show directories to `Phish-YYYY-MM-DD.Dot.Separated.Location.[LivePhishID]`. Matches any non-conforming directory with a date anywhere in its name (raw date dirs, or hand-named `Phish-YYYY-MM-DD.Location` dirs missing the `[ID]` suffix). livephish.com's search is fuzzy text matching, not a strict date filter, so search results are discarded if their actual show date doesn't match the requested date; if the directory name already carries location text, it's also cross-checked against the match. Anything that fails either check is skipped with a warning for manual review rather than renamed. When livephish.com has no release for the show at all, phish.net is queried (via its setlist page, not the paid API) purely to confirm the show and report its venue in the warning for manual research — it never drives a rename. Repeat runs skip a directory that hasn't changed (same name, same mtime) and previously came back "not found" or "location mismatch," avoiding a repeat network round trip; this skip never expires on its own (usage is bursty around tour season, so a calendar TTL wouldn't track anything real) — pass `--rescan` to force a fresh check, e.g. when you know livephish.com just added a release. Skip state lives in `$XDG_CACHE_HOME/phish-rename-state.json` (override with `--state`). Requires `requests` and `beautifulsoup4`.
 - **`phish-compare`** — Read-only diagnostic: shows matched/unmatched shows, studio album cross-references, and undated items in both the existing collection and torrent.
 - **`phish-merge`** — Performs the actual merge in up to four phases: (1) rsync backup to NAS, (2) copy torrent-only shows, (3) replace matched shows with canonical torrent copies, (4) rename existing-only shows to torrent naming style. Supports `--dry-run` and `--phase N`.
@@ -123,7 +123,7 @@ bats music-sync.bats          # Integration tests (9 tests)
 bats --verbose-run *.bats     # Verbose output for debugging
 ```
 
-### Pytest Tests (Python bin/ tools — 312 tests)
+### Pytest Tests (Python bin/ tools — 327 tests)
 ```bash
 pytest tests/                        # Run all Python tests
 pytest tests/test_phish_rename.py    # Tests for phish-rename
@@ -158,6 +158,7 @@ Required external tools:
 - `jq` — JSON processing for metadata parsing
 - `ssh` — Remote server access for verification
 - `python3` with `requests`, `beautifulsoup4`, and `mutagen` — Required by `bin/` tools (`pip install -r requirements.txt`)
+- `unrar` — Needed by `phish-intake` only to unpack `.rar` downloads (`sudo apt-get install unrar`)
 - `bats` — For running bats tests locally
 - `pyenv` — For managing Python version
 - `pytest` — For running Python tests locally
@@ -166,7 +167,7 @@ Required external tools:
 ## File Structure
 
 - `bin/` — Phish collection Python tools and Borg backup scripts
-  - `phish-intake` — Unzip new show downloads and run them through phish-rename + phish-retag
+  - `phish-intake` — Unpack new show downloads (zip/rar) and run them through phish-rename + phish-retag
   - `phish-rename` — Rename downloads to canonical LivePhish format
   - `phish-compare` — Compare existing collection vs torrent (read-only)
   - `phish-merge` — Merge torrent into existing collection
